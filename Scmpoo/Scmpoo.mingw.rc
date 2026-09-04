@@ -1,4 +1,2 @@
-#pragma code_page(932)
+#pragma code_page(65001)
 #include "Scmpoo.rc"
-
-1 RT_MANIFEST Scmpoo.manifest

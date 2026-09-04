@@ -5,9 +5,9 @@ set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_SOURCE_DIR}/cmake/CMakeUserMakeRules
 project(Scmpoo C)
 
 if(MSVC)
-  set(CMAKE_RC_FLAGS "/c 932 /l 0x0411")
+  set(CMAKE_RC_FLAGS "/c 65001 /l 0x0804")
 elseif(MINGW)
-  set(CMAKE_RC_FLAGS "--language=0411")
+  set(CMAKE_RC_FLAGS "--codepage=65001 --language=0804")
 endif()
 
 add_subdirectory(Scmpoo)

@@ -6,10 +6,34 @@
 #define STRICT
 
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#include <wchar.h>
 #include <Windows.h>
 #include <MMSystem.h>
 #include <ShellAPI.h>
+#include <ShlObj.h>
+
+#define SCMPOO_TIMER_BASE_MS 108U
+#define SCMPOO_SETTINGS_SECTION L"Scmpoo"
+#define SCMPOO_SETTINGS_DIRECTORY L"Scmpoo"
+#define SCMPOO_SETTINGS_FILE L"settings.ini"
+
+#define IDC_SETTINGS_CHIME 1001
+#define IDC_SETTINGS_SOUND 1002
+#define IDC_SETTINGS_ALWAYS_MOVING 1003
+#define IDC_SETTINGS_GRAVITY 1004
+#define IDC_SETTINGS_ALWAYS_ON_TOP 1005
+#define IDC_SETTINGS_SPEECH 1006
+#define IDC_SETTINGS_OWNER 1007
+#define IDC_SETTINGS_SPEED 1008
+#define IDC_SETTINGS_REMINDER 1009
+#define IDC_SETTINGS_DEFAULTS 1010
+#define IDC_ACTION_FLOWER 1101
+#define IDC_ACTION_BURN 1102
+#define IDC_ACTION_BLACK_SHEEP 1103
+#define IDC_ACTION_UFO 1104
+#define IDC_ACTION_FALL 1105
 
 /* GetActiveWindow is made local to current thread in 32-bit Windows. The function of global scope is now GetForegroundWindow. */
 #ifdef _WIN32
@@ -276,17 +300,17 @@ HBITMAP word_C0B8 = NULL; /* UFO beam colour rectangle image. */
 WORD word_C0BA = 0; /* Remaining no-update periods after clearing windows. */
 windowinfo stru_C0BC[32] = {{NULL, {0, 0, 0, 0}, {0}}}; /* Currently visible window list. */
 WORD word_CA3C = 0; /* Prevent special actions? */
-WORD word_CA3E = 0; /* Always on top? (unused) */
+WORD word_CA3E = 0; /* Configuration: Always on top. */
 int word_CA40 = 0; /* Known instance count. */
 UINT word_CA42 = 0U; /* Configuration: Gravity always on */
 HBRUSH word_CA44 = NULL; /* UFO beam mask colour brush. */
 int word_CA46 = 0; /* Fade out frame counter. */
 int word_CA48 = 0; /* Unused. */
 HPALETTE word_CA4A = NULL; /* Palette being used by window. */
-int word_CA4C = 0; /* Unused. */
-int word_CA4E = 0; /* Unused. */
-int word_CA50 = 0; /* Screen width. */
-int word_CA52 = 0; /* Screen height. */
+int word_CA4C = 0; /* Virtual desktop left coordinate. */
+int word_CA4E = 0; /* Virtual desktop top coordinate. */
+int word_CA50 = 0; /* Virtual desktop width. */
+int word_CA52 = 0; /* Virtual desktop height. */
 WORD word_CA54 = 0; /* Temporarily holds sleep timeout action. */
 WORD word_CA56 = 0; /* Not to clear subwindow? */
 HINSTANCE word_CA58 = NULL; /* Current instance. */
@@ -301,6 +325,27 @@ WORD word_CA78 = 0; /* Unused. */
 #ifdef _WIN32
 HWND ownerwindow = NULL;
 #endif
+
+WCHAR scmpoo_settings_path[MAX_PATH] = L"";
+WCHAR scmpoo_owner_name[41] = L"";
+UINT scmpoo_movement_speed = 100U;
+UINT scmpoo_reminder_minutes = 45U;
+UINT scmpoo_show_speech_bubbles = 1U;
+UINT scmpoo_timer_interval = SCMPOO_TIMER_BASE_MS;
+DWORD scmpoo_last_activity_tick = 0;
+DWORD scmpoo_last_reminder_tick = 0;
+DWORD scmpoo_speech_deadline = 0;
+HWND scmpoo_speech_window = NULL;
+
+#define SCREEN_LEFT (word_CA4C)
+#define SCREEN_TOP (word_CA4E)
+#define SCREEN_WIDTH (word_CA50)
+#define SCREEN_HEIGHT (word_CA52)
+#define SCREEN_RIGHT (word_CA4C + word_CA50)
+#define SCREEN_BOTTOM (word_CA4E + word_CA52)
+#define SCREEN_CENTER_X (word_CA4C + word_CA50 / 2)
+#define SCREEN_POINT_X(numerator, denominator) (word_CA4C + word_CA50 * (numerator) / (denominator))
+#define SCREEN_POINT_Y(numerator, denominator) (word_CA4E + word_CA52 * (numerator) / (denominator))
 
 void PASCAL sub_10(void FAR *, void FAR *);
 int PASCAL sub_114(void FAR *, void FAR *, int);
@@ -327,7 +372,7 @@ void sub_2B01(HWND, HWND);
 BOOL sub_2B30(HDC, spriteinfo *, int, int);
 void sub_2EEC(spriteinfo *);
 void sub_2F36(void);
-void sub_2FB7(LPCSTR, LPCSTR, UINT, LPCSTR);
+void sub_2FB7(LPCWSTR, LPCWSTR, UINT, LPCWSTR);
 void sub_2FF8(void);
 BOOL sub_306A(HWND);
 void sub_3119();
@@ -349,7 +394,7 @@ int sub_408C(HWND *, int, int, int, int);
 int sub_419E(HWND, int, int, int, int);
 void sub_4210(int, UINT, WORD);
 void sub_428E(void);
-void sub_42AA(LPCSTR);
+void sub_42AA(LPCWSTR);
 void sub_42C8(int, UINT, WORD);
 BOOL sub_42F3(HDC);
 void sub_44ED(void);
@@ -376,6 +421,19 @@ void sub_9350(int, int, int);
 void sub_93DF(HWND);
 void sub_9438(HWND);
 BOOL sub_9A49(HWND);
+HRGN scmpoo_create_sprite_region(HBITMAP, int, int, int, int, int, int);
+void scmpoo_apply_sprite_region(HWND, HBITMAP, int, int, int, int, int, int, int);
+void scmpoo_enable_modern_dpi(void);
+void scmpoo_update_virtual_desktop(void);
+BOOL scmpoo_get_monitor_rect(int, int, LPRECT);
+void scmpoo_apply_runtime_settings(HWND);
+void scmpoo_reset_user_activity(void);
+void scmpoo_update_reminder(void);
+void scmpoo_show_speech(LPCWSTR);
+void scmpoo_close_speech(void);
+BOOL scmpoo_build_settings_path(void);
+BOOL scmpoo_settings_file_is_unicode(void);
+void scmpoo_prepare_unicode_settings_file(void);
 
 /* Make mask bitmap image out of the first pixel (by simulating x86 assembly). */
 void PASCAL sub_10(void FAR * arg_4, void FAR * arg_0)
@@ -1028,17 +1086,188 @@ void sub_1A16(void FAR * arg_0, void FAR * arg_4, UINT arg_8)
     }
 }
 
+/* Enable per-monitor DPI awareness without requiring a recent import library. */
+void scmpoo_enable_modern_dpi(void)
+{
+    HMODULE user32;
+    BOOL (WINAPI * set_process_dpi_awareness_context)(HANDLE);
+    user32 = GetModuleHandleW(L"user32.dll");
+    if (user32 != NULL) {
+        set_process_dpi_awareness_context = (BOOL (WINAPI *)(HANDLE))GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+        if (set_process_dpi_awareness_context != NULL && set_process_dpi_awareness_context((HANDLE)-4)) {
+            return;
+        }
+    }
+    SetProcessDPIAware();
+}
+
+/* Refresh the complete virtual desktop, including monitors with negative coordinates. */
+void scmpoo_update_virtual_desktop(void)
+{
+    word_CA4C = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    word_CA4E = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    word_CA50 = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    word_CA52 = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (word_CA50 <= 0 || word_CA52 <= 0) {
+        word_CA4C = 0;
+        word_CA4E = 0;
+        word_CA50 = GetSystemMetrics(SM_CXSCREEN);
+        word_CA52 = GetSystemMetrics(SM_CYSCREEN);
+    }
+}
+
+BOOL scmpoo_get_monitor_rect(int x, int y, LPRECT rect)
+{
+    POINT point;
+    HMONITOR monitor;
+    MONITORINFO info;
+    point.x = x;
+    point.y = y;
+    monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+    if (monitor == NULL) {
+        return FALSE;
+    }
+    info.cbSize = sizeof(info);
+    if (!GetMonitorInfo(monitor, &info)) {
+        return FALSE;
+    }
+    *rect = info.rcMonitor;
+    return TRUE;
+}
+
+void scmpoo_close_speech(void)
+{
+    if (scmpoo_speech_window != NULL) {
+        DestroyWindow(scmpoo_speech_window);
+        scmpoo_speech_window = NULL;
+    }
+    scmpoo_speech_deadline = 0;
+}
+
+/* Display a lightweight Unicode companion bubble without disturbing the original state machine. */
+void scmpoo_show_speech(LPCWSTR message)
+{
+    int x;
+    int y;
+    int width;
+    int height;
+    HWND insert_after;
+    if (scmpoo_show_speech_bubbles == 0U || message == NULL || *message == L'\0') {
+        return;
+    }
+    scmpoo_close_speech();
+    width = 220;
+    height = 48;
+    x = word_A800 - (width - 40) / 2;
+    y = word_A802 - height - 8;
+    if (x < SCREEN_LEFT) {
+        x = SCREEN_LEFT;
+    }
+    if (x + width > SCREEN_RIGHT) {
+        x = SCREEN_RIGHT - width;
+    }
+    if (y < SCREEN_TOP) {
+        y = word_A802 + 48;
+    }
+    if (y + height > SCREEN_BOTTOM) {
+        y = SCREEN_BOTTOM - height;
+    }
+    scmpoo_speech_window = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        L"STATIC",
+        message,
+        WS_POPUP | WS_BORDER | SS_CENTER | SS_CENTERIMAGE,
+        x,
+        y,
+        width,
+        height,
+        ownerwindow,
+        NULL,
+        word_CA58,
+        NULL);
+    if (scmpoo_speech_window == NULL) {
+        return;
+    }
+    SendMessageW(scmpoo_speech_window, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    insert_after = word_CA3E != 0 ? HWND_TOPMOST : HWND_TOP;
+    SetWindowPos(scmpoo_speech_window, insert_after, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    scmpoo_speech_deadline = GetTickCount() + 5000U;
+}
+
+void scmpoo_reset_user_activity(void)
+{
+    scmpoo_last_activity_tick = GetTickCount();
+    scmpoo_last_reminder_tick = scmpoo_last_activity_tick;
+    scmpoo_close_speech();
+}
+
+void scmpoo_update_reminder(void)
+{
+    DWORD now;
+    DWORD interval;
+    WCHAR message[128];
+    now = GetTickCount();
+    if (scmpoo_speech_window != NULL && (LONG)(now - scmpoo_speech_deadline) >= 0) {
+        scmpoo_close_speech();
+    }
+    if (scmpoo_reminder_minutes < 5U) {
+        return;
+    }
+    interval = scmpoo_reminder_minutes * 60U * 1000U;
+    if ((DWORD)(now - scmpoo_last_activity_tick) < interval || (DWORD)(now - scmpoo_last_reminder_tick) < interval) {
+        return;
+    }
+    scmpoo_last_reminder_tick = now;
+    sub_42C8(110, 0U, 0);
+    if (scmpoo_owner_name[0] != L'\0') {
+        wsprintfW(message, L"%ls，休息一下、喝口水吧。", scmpoo_owner_name);
+    } else {
+        lstrcpyW(message, L"已经专注很久啦，休息一下、喝口水吧。");
+    }
+    scmpoo_show_speech(message);
+}
+
+/* Apply options that affect live window state and animation cadence. */
+void scmpoo_apply_runtime_settings(HWND hWnd)
+{
+    HWND insert_after;
+    if (scmpoo_movement_speed < 50U) {
+        scmpoo_movement_speed = 50U;
+    }
+    if (scmpoo_movement_speed > 200U) {
+        scmpoo_movement_speed = 200U;
+    }
+    scmpoo_timer_interval = SCMPOO_TIMER_BASE_MS * 100U / scmpoo_movement_speed;
+    if (scmpoo_timer_interval < 16U) {
+        scmpoo_timer_interval = 16U;
+    }
+    if (hWnd != NULL) {
+        KillTimer(hWnd, 1U);
+        SetTimer(hWnd, 1U, scmpoo_timer_interval, NULL);
+        insert_after = word_CA3E != 0 ? HWND_TOPMOST : HWND_NOTOPMOST;
+        SetWindowPos(hWnd, insert_after, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+    }
+    if (word_CA60[8] != NULL) {
+        KillTimer(word_CA60[8], 1U);
+        SetTimer(word_CA60[8], 1U, scmpoo_timer_interval, NULL);
+        insert_after = word_CA3E != 0 ? HWND_TOPMOST : HWND_NOTOPMOST;
+        SetWindowPos(word_CA60[8], insert_after, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+    }
+}
+
 /* WinMain function. */
 int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
     HWND var_2;
     MSG var_14;
     WNDCLASS var_2E;
+    scmpoo_enable_modern_dpi();
+    scmpoo_update_virtual_desktop();
     if (hPrevInstance == NULL) {
         var_2E.style = CS_DBLCLKS;
         var_2E.lpfnWndProc = sub_1DF3;
         var_2E.cbClsExtra = 0;
-        var_2E.cbWndExtra = 8;
+        var_2E.cbWndExtra = (int)(sizeof(LONG_PTR) * 2);
         var_2E.hInstance = hInstance;
         var_2E.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(100));
         var_2E.hCursor = LoadCursor(hInstance, MAKEINTRESOURCE(106));
@@ -1098,6 +1327,9 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
     ShowWindow(var_2, nShowCmd);
     UpdateWindow(var_2);
+    if (lpCmdLine != NULL && strstr(lpCmdLine, "--settings") != NULL) {
+        PostMessage(var_2, WM_USER + 2, 0, 0);
+    }
     while (GetMessage(&var_14, NULL, 0U, 0U)) {
         TranslateMessage(&var_14);
         DispatchMessage(&var_14);
@@ -1126,10 +1358,11 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     int var_12;
     RECT var_1A;
     POINT var_1E;
-    char var_122[260];
+    WCHAR var_122[260];
     POINT var_126;
     UINT var_128;
     FARPROC proc;
+    HMENU menu;
     LPWINDOWPOS windowpos;
 #ifdef _WIN32
     HANDLE user32;
@@ -1137,7 +1370,7 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     switch (uMsg) {
     case WM_CREATE:
         if (!sub_3C20(hWnd)) {
-            MessageBox(hWnd, "Screen Mate�͍ő�W�܂łł�", "Screen Mate", MB_ICONHAND | MB_OK);
+            MessageBoxW(hWnd, L"Screen Mate 最多只能同时运行 9 只小羊。", L"Screen Mate", MB_ICONHAND | MB_OK);
             return -1;
         }
 #ifdef _WIN32
@@ -1155,9 +1388,7 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         DragAcceptFiles(hWnd, TRUE);
         word_C0B0 = hWnd;
         sub_2F36();
-        if (word_CA3E != 0) {
-            SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
-        }
+        scmpoo_reset_user_activity();
         var_2 = GetDC(hWnd);
         var_A = FindResource(word_CA58, MAKEINTRESOURCE(101), RT_BITMAP);
         var_8 = LoadResource(word_CA58, var_A);
@@ -1168,22 +1399,24 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         SelectPalette(var_2, word_CA4A, FALSE);
         RealizePalette(var_2);
         if (!sub_42F3(var_2)) {
-            MessageBox(hWnd, "���������s�����Ă��܂�", "Screen Mate", MB_ICONHAND | MB_OK);
+            MessageBoxW(hWnd, L"内存不足，无法载入原版小羊素材。", L"Screen Mate", MB_ICONHAND | MB_OK);
             ReleaseDC(hWnd, var_2);
             return -1;
         }
         ReleaseDC(hWnd, var_2);
         if (!sub_306A(hWnd)) {
-            MessageBox(hWnd, "���������s�����Ă��܂�", "Screen Mate", MB_ICONHAND | MB_OK);
+            MessageBoxW(hWnd, L"内存不足，无法建立动画缓冲区。", L"Screen Mate", MB_ICONHAND | MB_OK);
             return -1;
         }
-        SetTimer(hWnd, 1U, 108U, NULL);
+        scmpoo_apply_runtime_settings(hWnd);
         break;
     case WM_DROPFILES:
         if (word_CA60[8] == NULL) {
-            if (DragQueryFile((HDROP)wParam, 0U, var_122, 260U) != 0U) {
+            if (DragQueryFileW((HDROP)wParam, 0U, var_122, 260U) != 0U) {
                 sub_42AA(var_122);
                 sub_8FD7(4);
+                scmpoo_reset_user_activity();
+                scmpoo_show_speech(L"谢谢，好吃！");
             }
         }
         DragFinish((HDROP)wParam);
@@ -1204,12 +1437,19 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 }
             }
             sub_2ABF(hWnd);
-            *(HMENU *)var_122 = CreatePopupMenu();
-            AppendMenu(*(HMENU *)var_122, 0U, 101U, "Screen Mate�̐ݒ�...");
-            AppendMenu(*(HMENU *)var_122, 0U, IDCANCEL, "Screen Mate�̏I��");
+            menu = CreatePopupMenu();
+            AppendMenuW(menu, MF_STRING, 101U, L"小羊设置...");
+            AppendMenuW(menu, MF_SEPARATOR, 0U, NULL);
+            AppendMenuW(menu, MF_STRING, IDC_ACTION_FLOWER, L"喂一朵花");
+            AppendMenuW(menu, MF_STRING, IDC_ACTION_BURN, L"燃烧与浴盆");
+            AppendMenuW(menu, MF_STRING, IDC_ACTION_BLACK_SHEEP, L"遇见黑羊");
+            AppendMenuW(menu, MF_STRING, IDC_ACTION_UFO, L"UFO 事件");
+            AppendMenuW(menu, MF_STRING, IDC_ACTION_FALL, L"从空中落下");
+            AppendMenuW(menu, MF_SEPARATOR, 0U, NULL);
+            AppendMenuW(menu, MF_STRING, IDCANCEL, L"退出小羊");
             GetCursorPos(&var_126);
-            TrackPopupMenu(*(HMENU *)var_122, 0U, var_126.x, var_126.y, 0, hWnd, NULL);
-            DestroyMenu(*(HMENU *)var_122);
+            TrackPopupMenu(menu, TPM_RIGHTBUTTON, var_126.x, var_126.y, 0, hWnd, NULL);
+            DestroyMenu(menu);
             return 0;
         default:
             break;
@@ -1256,11 +1496,21 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         word_A7AC = 0;
         word_C0B0 = hWnd;
+        scmpoo_update_reminder();
         sub_4CF8();
         sub_3284(hWnd);
         sub_3717(hWnd);
         word_A7A2 = 1;
         return 0;
+    case WM_DISPLAYCHANGE:
+    case WM_SETTINGCHANGE:
+        scmpoo_update_virtual_desktop();
+        return 0;
+#ifdef WM_DPICHANGED
+    case WM_DPICHANGED:
+        scmpoo_update_virtual_desktop();
+        return 0;
+#endif
     case WM_USER:
         if (wParam == 1) {
             sub_3D5F((HWND)lParam);
@@ -1291,9 +1541,29 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_QUIT:
         return 0;
     case WM_COMMAND:
-        switch (wParam) {
+        switch (LOWORD(wParam)) {
         case 101U:
             SendMessage(hWnd, WM_USER + 2, 0, 0);
+            break;
+        case IDC_ACTION_FLOWER:
+            sub_904A(14);
+            scmpoo_reset_user_activity();
+            break;
+        case IDC_ACTION_BURN:
+            sub_904A(17);
+            scmpoo_reset_user_activity();
+            break;
+        case IDC_ACTION_BLACK_SHEEP:
+            sub_904A(18 + rand() % 3);
+            scmpoo_reset_user_activity();
+            break;
+        case IDC_ACTION_UFO:
+            sub_904A(21 + rand() % 3);
+            scmpoo_reset_user_activity();
+            break;
+        case IDC_ACTION_FALL:
+            sub_904A(27);
+            scmpoo_reset_user_activity();
             break;
         case IDCANCEL:
             DestroyWindow(hWnd);
@@ -1316,6 +1586,7 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         word_A79A = (short)LOWORD(lParam) + var_1A.left;
         word_A79C = (short)HIWORD(lParam) + var_1A.top;
         word_A79E = 1;
+        scmpoo_reset_user_activity();
         sub_8FD7(1);
         sub_3284(hWnd);
         sub_3717(hWnd);
@@ -1362,15 +1633,16 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         break;
     case WM_LBUTTONDBLCLK:
     case WM_USER + 2:
+        scmpoo_reset_user_activity();
         *(WORD *)var_122 = word_CA3E;
         var_128 = word_CA42;
         word_C0B0 = hWnd;
         if ((HIBYTE(GetKeyState(VK_SHIFT)) & 0x80) != 0 && (HIBYTE(GetKeyState(VK_CONTROL)) & 0x80) != 0) {
             proc = MakeProcInstance((FARPROC)sub_292A, word_CA58);
-            DialogBox(word_CA58, MAKEINTRESOURCE(108), hWnd, (DLGPROC)proc);
+            DialogBoxW(word_CA58, MAKEINTRESOURCEW(108), hWnd, (DLGPROC)proc);
         } else {
             proc = MakeProcInstance((FARPROC)sub_27FF, word_CA58);
-            DialogBox(word_CA58, MAKEINTRESOURCE(107), hWnd, (DLGPROC)proc);
+            DialogBoxW(word_CA58, MAKEINTRESOURCEW(107), hWnd, (DLGPROC)proc);
         }
         FreeProcInstance(proc);
         sub_3237(hWnd);
@@ -1386,6 +1658,7 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_DESTROY:
+        scmpoo_close_speech();
         sub_3D12(hWnd);
         if (word_CA60[8] != NULL) {
             sub_2A96();
@@ -1414,7 +1687,7 @@ LRESULT CALLBACK sub_2699(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             DestroyWindow(hWnd);
             return 1;
         }
-        SetTimer(hWnd, 1U, 108U, NULL);
+        SetTimer(hWnd, 1U, scmpoo_timer_interval, NULL);
         break;
     case WM_WINDOWPOSCHANGING:
         var_4 = (LPWINDOWPOS)lParam;
@@ -1431,6 +1704,15 @@ LRESULT CALLBACK sub_2699(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             sub_4CE1();
         }
         return 0;
+    case WM_DISPLAYCHANGE:
+    case WM_SETTINGCHANGE:
+        scmpoo_update_virtual_desktop();
+        return 0;
+#ifdef WM_DPICHANGED
+    case WM_DPICHANGED:
+        scmpoo_update_virtual_desktop();
+        return 0;
+#endif
     case WM_PAINT:
         if (word_A7B4 != 0) {
             word_A7B4 = 0;
@@ -1452,33 +1734,124 @@ LRESULT CALLBACK sub_2699(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     return DefWindowProc(hWnd, uMsg, wParam, lParam);
 }
 
-/* Configuration window callback. */
+void scmpoo_set_dialog_controls(HWND hDlg, BOOL use_defaults)
+{
+    UINT sound_enabled;
+    UINT chime_enabled;
+    UINT always_moving;
+    UINT gravity_enabled;
+    UINT always_on_top;
+    UINT speech_enabled;
+    UINT speed;
+    UINT reminder;
+    LPCWSTR owner_name;
+    if (use_defaults) {
+        sound_enabled = 1U;
+        chime_enabled = 0U;
+        always_moving = 0U;
+        gravity_enabled = 1U;
+        always_on_top = 1U;
+        speech_enabled = 1U;
+        speed = 100U;
+        reminder = 45U;
+        owner_name = L"";
+    } else {
+        sound_enabled = word_CA5A;
+        chime_enabled = word_C0AC;
+        always_moving = word_C0B6;
+        gravity_enabled = word_CA42;
+        always_on_top = word_CA3E;
+        speech_enabled = scmpoo_show_speech_bubbles;
+        speed = scmpoo_movement_speed;
+        reminder = scmpoo_reminder_minutes;
+        owner_name = scmpoo_owner_name;
+    }
+    CheckDlgButton(hDlg, IDC_SETTINGS_SOUND, sound_enabled ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hDlg, IDC_SETTINGS_CHIME, chime_enabled ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hDlg, IDC_SETTINGS_ALWAYS_MOVING, always_moving ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hDlg, IDC_SETTINGS_GRAVITY, gravity_enabled ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hDlg, IDC_SETTINGS_ALWAYS_ON_TOP, always_on_top ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hDlg, IDC_SETTINGS_SPEECH, speech_enabled ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemTextW(hDlg, IDC_SETTINGS_OWNER, owner_name);
+    SetDlgItemInt(hDlg, IDC_SETTINGS_SPEED, speed, FALSE);
+    SetDlgItemInt(hDlg, IDC_SETTINGS_REMINDER, reminder, FALSE);
+}
+
+/* Unicode configuration window callback. */
 BOOL CALLBACK sub_27FF(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    BOOL translated_speed;
+    BOOL translated_reminder;
+    UINT speed;
+    UINT reminder;
     switch (uMsg) {
     case WM_INITDIALOG:
-        SendDlgItemMessage(hDlg, 1001, BM_SETCHECK, (WPARAM)word_C0AC, 0);
-        SendDlgItemMessage(hDlg, 1002, BM_SETCHECK, (WPARAM)word_CA5A, 0);
-        SendDlgItemMessage(hDlg, 1003, BM_SETCHECK, (WPARAM)word_C0B6, 0);
-        SendDlgItemMessage(hDlg, 1004, BM_SETCHECK, (WPARAM)word_CA42, 0);
+        scmpoo_set_dialog_controls(hDlg, FALSE);
         return TRUE;
     case WM_COMMAND:
-        if (wParam == IDRETRY) {
-            WinHelp(hDlg, "Scmpoo16.hlp", HELP_INDEX, 0L);
+        if (LOWORD(wParam) == IDRETRY) {
+            MessageBoxW(
+                hDlg,
+                L"原版兼容：声音、整点报时、持续活动和窗口重力。\n\n"
+                L"现代扩展：50%–200% 动画速度、始终置顶、Unicode 称呼、"
+                L"5–240 分钟休息提醒和对话气泡。\n\n"
+                L"程序会自动使用完整虚拟桌面及 Per-Monitor V2 DPI，不需要管理员权限。",
+                L"Screen Mate 小羊设置帮助",
+                MB_ICONINFORMATION | MB_OK);
             return TRUE;
         }
-        if (wParam == IDOK) {
-            word_C0AC = IsDlgButtonChecked(hDlg, 1001);
-            word_CA5A = IsDlgButtonChecked(hDlg, 1002);
-            word_C0B6 = IsDlgButtonChecked(hDlg, 1003);
-            word_CA42 = IsDlgButtonChecked(hDlg, 1004);
-            sub_2FF8();
+        if (LOWORD(wParam) == IDC_SETTINGS_DEFAULTS) {
+            scmpoo_set_dialog_controls(hDlg, TRUE);
+            return TRUE;
         }
-        if (wParam == IDABORT) {
+        if (LOWORD(wParam) >= IDC_ACTION_FLOWER && LOWORD(wParam) <= IDC_ACTION_FALL) {
+            if (LOWORD(wParam) == IDC_ACTION_FLOWER) {
+                sub_904A(14);
+            } else if (LOWORD(wParam) == IDC_ACTION_BURN) {
+                sub_904A(17);
+            } else if (LOWORD(wParam) == IDC_ACTION_BLACK_SHEEP) {
+                sub_904A(18 + rand() % 3);
+            } else if (LOWORD(wParam) == IDC_ACTION_UFO) {
+                sub_904A(21 + rand() % 3);
+            } else {
+                sub_904A(27);
+            }
+            scmpoo_reset_user_activity();
+            EndDialog(hDlg, (int)LOWORD(wParam));
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDOK) {
+            speed = GetDlgItemInt(hDlg, IDC_SETTINGS_SPEED, &translated_speed, FALSE);
+            reminder = GetDlgItemInt(hDlg, IDC_SETTINGS_REMINDER, &translated_reminder, FALSE);
+            if (!translated_speed || speed < 50U || speed > 200U) {
+                MessageBoxW(hDlg, L"动画速度必须是 50 到 200 之间的整数。", L"设置值无效", MB_ICONWARNING | MB_OK);
+                SetFocus(GetDlgItem(hDlg, IDC_SETTINGS_SPEED));
+                return TRUE;
+            }
+            if (!translated_reminder || reminder < 5U || reminder > 240U) {
+                MessageBoxW(hDlg, L"休息提醒必须是 5 到 240 分钟。", L"设置值无效", MB_ICONWARNING | MB_OK);
+                SetFocus(GetDlgItem(hDlg, IDC_SETTINGS_REMINDER));
+                return TRUE;
+            }
+            word_C0AC = IsDlgButtonChecked(hDlg, IDC_SETTINGS_CHIME) == BST_CHECKED;
+            word_CA5A = IsDlgButtonChecked(hDlg, IDC_SETTINGS_SOUND) == BST_CHECKED;
+            word_C0B6 = IsDlgButtonChecked(hDlg, IDC_SETTINGS_ALWAYS_MOVING) == BST_CHECKED;
+            word_CA42 = IsDlgButtonChecked(hDlg, IDC_SETTINGS_GRAVITY) == BST_CHECKED;
+            word_CA3E = IsDlgButtonChecked(hDlg, IDC_SETTINGS_ALWAYS_ON_TOP) == BST_CHECKED;
+            scmpoo_show_speech_bubbles = IsDlgButtonChecked(hDlg, IDC_SETTINGS_SPEECH) == BST_CHECKED;
+            scmpoo_movement_speed = speed;
+            scmpoo_reminder_minutes = reminder;
+            GetDlgItemTextW(hDlg, IDC_SETTINGS_OWNER, scmpoo_owner_name, 41);
+            sub_2FF8();
+            scmpoo_apply_runtime_settings(word_C0B0);
+            scmpoo_reset_user_activity();
+            scmpoo_show_speech(L"设置已经保存。");
+        }
+        if (LOWORD(wParam) == IDABORT) {
             DestroyWindow(word_C0B0);
         }
-        if (wParam == IDOK || wParam == IDCANCEL || wParam == IDABORT) {
-            EndDialog(hDlg, (int)wParam);
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL || LOWORD(wParam) == IDABORT) {
+            EndDialog(hDlg, (int)LOWORD(wParam));
         }
         break;
     default:
@@ -1539,6 +1912,9 @@ void sub_2A21(void)
     if (word_CA60[8] != NULL) {
         ShowWindow(word_CA60[8], SW_SHOWNA);
         UpdateWindow(word_CA60[8]);
+        if (word_CA3E != 0) {
+            SetWindowPos(word_CA60[8], HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+        }
     } else {
         word_CA3C = 1;
         sub_4CE1();
@@ -1690,34 +2066,140 @@ void sub_2EEC(spriteinfo * arg_0)
     arg_0->bitmaps[1] = NULL;
 }
 
-/* Read configuration from file. */
+BOOL scmpoo_build_settings_path(void)
+{
+    WCHAR local_app_data[MAX_PATH];
+    WCHAR settings_directory[MAX_PATH];
+    HRESULT result;
+    if (scmpoo_settings_path[0] != L'\0') {
+        return TRUE;
+    }
+    result = SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA | CSIDL_FLAG_CREATE, NULL, SHGFP_TYPE_CURRENT, local_app_data);
+    if (FAILED(result)) {
+        lstrcpyW(scmpoo_settings_path, SCMPOO_SETTINGS_FILE);
+        return FALSE;
+    }
+    if (lstrlenW(local_app_data) + lstrlenW(SCMPOO_SETTINGS_DIRECTORY) + 2 >= MAX_PATH) {
+        lstrcpyW(scmpoo_settings_path, SCMPOO_SETTINGS_FILE);
+        return FALSE;
+    }
+    lstrcpyW(settings_directory, local_app_data);
+    lstrcatW(settings_directory, L"\\");
+    lstrcatW(settings_directory, SCMPOO_SETTINGS_DIRECTORY);
+    if (!CreateDirectoryW(settings_directory, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+        lstrcpyW(scmpoo_settings_path, SCMPOO_SETTINGS_FILE);
+        return FALSE;
+    }
+    lstrcpyW(scmpoo_settings_path, settings_directory);
+    lstrcatW(scmpoo_settings_path, L"\\");
+    lstrcatW(scmpoo_settings_path, SCMPOO_SETTINGS_FILE);
+    return TRUE;
+}
+
+BOOL scmpoo_settings_file_is_unicode(void)
+{
+    HANDLE file;
+    BYTE marker[2];
+    DWORD bytes_read;
+    file = CreateFileW(scmpoo_settings_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        return FALSE;
+    }
+    marker[0] = 0;
+    marker[1] = 0;
+    bytes_read = 0;
+    ReadFile(file, marker, sizeof(marker), &bytes_read, NULL);
+    CloseHandle(file);
+    return bytes_read == 2 && marker[0] == 0xFF && marker[1] == 0xFE;
+}
+
+void scmpoo_prepare_unicode_settings_file(void)
+{
+    HANDLE file;
+    BYTE marker[2];
+    DWORD bytes_written;
+    if (scmpoo_settings_file_is_unicode()) {
+        return;
+    }
+    WritePrivateProfileStringW(NULL, NULL, NULL, scmpoo_settings_path);
+    file = CreateFileW(scmpoo_settings_path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    marker[0] = 0xFF;
+    marker[1] = 0xFE;
+    bytes_written = 0;
+    WriteFile(file, marker, sizeof(marker), &bytes_written, NULL);
+    CloseHandle(file);
+}
+
+/* Read Unicode configuration from the current user's local application data. */
 void sub_2F36(void)
 {
+    BOOL first_run;
     word_CA78 = 1;
-    word_CA3E = 0;
+    scmpoo_build_settings_path();
+    first_run = GetFileAttributesW(scmpoo_settings_path) == INVALID_FILE_ATTRIBUTES;
+    word_CA3E = 1;
     word_C0AC = 0U;
-    word_CA5A = 0U;
-    word_CA5A = GetPrivateProfileInt("Stray", "Sound", 0, "scmate.ini");
-    word_C0AC = GetPrivateProfileInt("Stray", "Alarm", 0, "scmate.ini");
-    word_C0B6 = GetPrivateProfileInt("Stray", "NoSleep", 0, "scmate.ini");
-    word_CA42 = GetPrivateProfileInt("Stray", "GForce", 1, "scmate.ini");
+    word_CA5A = 1U;
+    word_C0B6 = 0U;
+    word_CA42 = 1U;
+    scmpoo_movement_speed = 100U;
+    scmpoo_reminder_minutes = 45U;
+    scmpoo_show_speech_bubbles = 1U;
+    scmpoo_owner_name[0] = L'\0';
+    if (first_run) {
+        /* Import the four original values when a legacy scmate.ini can be found. */
+        word_CA5A = GetPrivateProfileIntW(L"Stray", L"Sound", word_CA5A, L"scmate.ini");
+        word_C0AC = GetPrivateProfileIntW(L"Stray", L"Alarm", word_C0AC, L"scmate.ini");
+        word_C0B6 = GetPrivateProfileIntW(L"Stray", L"NoSleep", word_C0B6, L"scmate.ini");
+        word_CA42 = GetPrivateProfileIntW(L"Stray", L"GForce", word_CA42, L"scmate.ini");
+        sub_2FF8();
+        return;
+    }
+    word_CA5A = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"Sound", word_CA5A, scmpoo_settings_path);
+    word_C0AC = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"Alarm", word_C0AC, scmpoo_settings_path);
+    word_C0B6 = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"NoSleep", word_C0B6, scmpoo_settings_path);
+    word_CA42 = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"GForce", word_CA42, scmpoo_settings_path);
+    word_CA3E = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"AlwaysOnTop", word_CA3E, scmpoo_settings_path);
+    scmpoo_show_speech_bubbles = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"ShowSpeechBubbles", scmpoo_show_speech_bubbles, scmpoo_settings_path);
+    scmpoo_movement_speed = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"MovementSpeedPercent", scmpoo_movement_speed, scmpoo_settings_path);
+    scmpoo_reminder_minutes = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"ReminderMinutes", scmpoo_reminder_minutes, scmpoo_settings_path);
+    GetPrivateProfileStringW(SCMPOO_SETTINGS_SECTION, L"OwnerName", L"", scmpoo_owner_name, 41U, scmpoo_settings_path);
+    if (scmpoo_movement_speed < 50U || scmpoo_movement_speed > 200U) {
+        scmpoo_movement_speed = 100U;
+    }
+    if (scmpoo_reminder_minutes < 5U || scmpoo_reminder_minutes > 240U) {
+        scmpoo_reminder_minutes = 45U;
+    }
+    if (!scmpoo_settings_file_is_unicode()) {
+        sub_2FF8();
+    }
 }
 
 /* Save individual configuration to file. */
-void sub_2FB7(LPCSTR arg_0, LPCSTR arg_4, UINT arg_8, LPCSTR arg_A)
+void sub_2FB7(LPCWSTR arg_0, LPCWSTR arg_4, UINT arg_8, LPCWSTR arg_A)
 {
-    char var_28[40];
-    wsprintf(var_28, "%u", arg_8);
-    WritePrivateProfileString(arg_0, arg_4, var_28, arg_A);
+    WCHAR var_28[40];
+    wsprintfW(var_28, L"%u", arg_8);
+    WritePrivateProfileStringW(arg_0, arg_4, var_28, arg_A);
 }
 
 /* Save configurations to file. */
 void sub_2FF8(void)
 {
-    sub_2FB7("Stray", "Sound", word_CA5A, "scmate.ini");
-    sub_2FB7("Stray", "Alarm", word_C0AC, "scmate.ini");
-    sub_2FB7("Stray", "NoSleep", word_C0B6, "scmate.ini");
-    sub_2FB7("Stray", "GForce", word_CA42, "scmate.ini");
+    scmpoo_build_settings_path();
+    scmpoo_prepare_unicode_settings_file();
+    sub_2FB7(SCMPOO_SETTINGS_SECTION, L"Sound", word_CA5A, scmpoo_settings_path);
+    sub_2FB7(SCMPOO_SETTINGS_SECTION, L"Alarm", word_C0AC, scmpoo_settings_path);
+    sub_2FB7(SCMPOO_SETTINGS_SECTION, L"NoSleep", word_C0B6, scmpoo_settings_path);
+    sub_2FB7(SCMPOO_SETTINGS_SECTION, L"GForce", word_CA42, scmpoo_settings_path);
+    sub_2FB7(SCMPOO_SETTINGS_SECTION, L"AlwaysOnTop", word_CA3E, scmpoo_settings_path);
+    sub_2FB7(SCMPOO_SETTINGS_SECTION, L"ShowSpeechBubbles", scmpoo_show_speech_bubbles, scmpoo_settings_path);
+    sub_2FB7(SCMPOO_SETTINGS_SECTION, L"MovementSpeedPercent", scmpoo_movement_speed, scmpoo_settings_path);
+    sub_2FB7(SCMPOO_SETTINGS_SECTION, L"ReminderMinutes", scmpoo_reminder_minutes, scmpoo_settings_path);
+    WritePrivateProfileStringW(SCMPOO_SETTINGS_SECTION, L"OwnerName", scmpoo_owner_name, scmpoo_settings_path);
 }
 
 /* Initialize bitmaps. */
@@ -1737,10 +2219,7 @@ BOOL sub_306A(HWND arg_0)
     if (word_A7BA == NULL) {
         goto loc_3104;
     }
-    word_CA4C = 0;
-    word_CA4E = 0;
-    word_CA50 = GetSystemMetrics(SM_CXSCREEN);
-    word_CA52 = GetSystemMetrics(SM_CYSCREEN);
+    scmpoo_update_virtual_desktop();
     ReleaseDC(arg_0, var_2);
     return TRUE;
 loc_3104:
@@ -1783,6 +2262,107 @@ void sub_31A8(int arg_0, int arg_2, int arg_4)
     word_A7C2 = stru_A8A2[arg_4].y;
     word_A7DE = stru_A8A2[arg_4].width;
     word_A7E0 = stru_A8A2[arg_4].height;
+}
+
+/* Build a pixel-exact window region from an original monochrome sprite mask.
+ * The reconstructed renderer uses white mask pixels for the transparent colour
+ * and black pixels for the visible part of each frame. */
+HRGN scmpoo_create_sprite_region(HBITMAP mask, int source_x, int source_y, int width, int height, int offset_x, int offset_y)
+{
+    HRGN result;
+    HRGN run_region;
+    HDC mask_dc;
+    HGDIOBJ old_bitmap;
+    COLORREF pixel;
+    int x;
+    int y;
+    int run_start;
+    BOOL failed;
+
+    result = CreateRectRgn(0, 0, 0, 0);
+    if (result == NULL) {
+        return NULL;
+    }
+    if (width <= 0 || height <= 0) {
+        return result;
+    }
+    if (mask == NULL) {
+        SetRectRgn(result, offset_x, offset_y, offset_x + width, offset_y + height);
+        return result;
+    }
+
+    mask_dc = CreateCompatibleDC(NULL);
+    if (mask_dc == NULL) {
+        SetRectRgn(result, offset_x, offset_y, offset_x + width, offset_y + height);
+        return result;
+    }
+    old_bitmap = SelectObject(mask_dc, mask);
+    if (old_bitmap == NULL || old_bitmap == HGDI_ERROR) {
+        DeleteDC(mask_dc);
+        SetRectRgn(result, offset_x, offset_y, offset_x + width, offset_y + height);
+        return result;
+    }
+
+    failed = FALSE;
+    for (y = 0; y < height && !failed; y += 1) {
+        run_start = -1;
+        for (x = 0; x <= width; x += 1) {
+            if (x < width) {
+                pixel = GetPixel(mask_dc, source_x + x, source_y + y);
+                if (pixel == CLR_INVALID) {
+                    failed = TRUE;
+                    break;
+                }
+            } else {
+                pixel = RGB(255, 255, 255);
+            }
+            if (pixel != RGB(255, 255, 255)) {
+                if (run_start < 0) {
+                    run_start = x;
+                }
+            } else if (run_start >= 0) {
+                run_region = CreateRectRgn(offset_x + run_start, offset_y + y, offset_x + x, offset_y + y + 1);
+                if (run_region == NULL) {
+                    failed = TRUE;
+                    break;
+                }
+                CombineRgn(result, result, run_region, RGN_OR);
+                DeleteObject(run_region);
+                run_start = -1;
+            }
+        }
+    }
+
+    SelectObject(mask_dc, old_bitmap);
+    DeleteDC(mask_dc);
+    if (failed) {
+        SetRectRgn(result, offset_x, offset_y, offset_x + width, offset_y + height);
+    }
+    return result;
+}
+
+/* SetWindowRgn removes every transparent mask pixel from the native popup
+ * window. This keeps the original hard-edged pixel art while making the
+ * background genuinely transparent instead of merely copying the desktop. */
+void scmpoo_apply_sprite_region(HWND window, HBITMAP mask, int source_x, int source_y, int width, int height, int offset_x, int offset_y, int beam_height)
+{
+    HRGN window_region;
+    HRGN beam_region;
+
+    window_region = scmpoo_create_sprite_region(mask, source_x, source_y, width, height, offset_x, offset_y);
+    if (window_region == NULL) {
+        return;
+    }
+    if (beam_height > 0) {
+        beam_region = CreateRectRgn(0, 40, 40, 40 + beam_height);
+        if (beam_region != NULL) {
+            CombineRgn(window_region, window_region, beam_region, RGN_OR);
+            DeleteObject(beam_region);
+        }
+    }
+    if (!SetWindowRgn(window, window_region, FALSE)) {
+        DeleteObject(window_region);
+    }
 }
 
 /* Clear window. */
@@ -1879,7 +2459,8 @@ void sub_3284(HWND arg_0)
         }
         word_A7D2 = 1;
         word_CA5E = 1;
-        MoveWindow(arg_0, word_A7E2, word_A7E4, word_A7E6, word_A7E8 + word_CA72, TRUE);
+        MoveWindow(arg_0, word_A7E2, word_A7E4, word_A7E6, word_A7E8 + word_CA72, FALSE);
+        scmpoo_apply_sprite_region(arg_0, word_A7BE, word_A7C0, word_A7C2, word_A7DE, word_A7E0, var_16, var_14, word_CA72);
         word_CA5E = 0;
     }
     DeleteDC(var_4);
@@ -1921,13 +2502,13 @@ void sub_3717(HWND arg_0)
     BitBlt(var_2, 0, 0, word_A7E6, word_A7E8, var_4, 0, 0, SRCCOPY);
     if (word_CA72 != 0) {
         if (word_C0B8 == NULL) {
-            word_C0B8 = CreateCompatibleBitmap(var_2, 40, word_CA52 * 4 / 5);
+            word_C0B8 = CreateCompatibleBitmap(var_2, 40, SCREEN_HEIGHT * 4 / 5);
             if (word_C0B8 == NULL) {
                 goto loc_398B;
             }
         }
         if (word_C0B2 == NULL) {
-            word_C0B2 = CreateCompatibleBitmap(var_2, 40, word_CA52 * 4 / 5);
+            word_C0B2 = CreateCompatibleBitmap(var_2, 40, SCREEN_HEIGHT * 4 / 5);
             if (word_C0B2 == NULL) {
                 goto loc_398B;
             }
@@ -2017,8 +2598,8 @@ int sub_3A36(int arg_0, int arg_2, int arg_4, int arg_6)
     int var_A;
     for (var_2 = 0; var_2 < 8; var_2 += 1) {
         if (word_CA60[var_2] != NULL) {
-            var_4 = (short)GetWindowWord(word_CA60[var_2], 0);
-            var_8 = (short)GetWindowWord(word_CA60[var_2], 2);
+            var_4 = (int)GetWindowLongPtr(word_CA60[var_2], 0);
+            var_8 = (int)GetWindowLongPtr(word_CA60[var_2], (int)sizeof(LONG_PTR));
             var_6 = var_4 + 40;
             var_A = var_8 + 40;
             if (var_6 == 0) {
@@ -2155,7 +2736,7 @@ void sub_3DF0(void)
     var_6 = 0;
     while ((var_2 = GetWindow(var_2, var_4)) != NULL && var_6 < 32) {
         var_4 = GW_HWNDNEXT;
-        if (var_2 == word_C0B0) {
+        if (var_2 == word_C0B0 || var_2 == word_CA60[8] || var_2 == ownerwindow || var_2 == scmpoo_speech_window) {
             continue;
         }
         if ((GetWindowLong(var_2, GWL_STYLE) & WS_VISIBLE) != 0) {
@@ -2218,8 +2799,9 @@ int sub_408C(HWND * arg_0, int arg_2, int arg_4, int arg_6, int arg_8)
 {
     int var_2;
     int var_4;
+    RECT monitor_rect;
     for (var_2 = 0; var_2 < word_CA74; var_2 += 1) {
-        if (stru_C0BC[var_2].rect.top <= arg_2 && stru_C0BC[var_2].rect.top > arg_4 && stru_C0BC[var_2].rect.left < arg_8 && stru_C0BC[var_2].rect.right > arg_6 && stru_C0BC[var_2].rect.top > 10) {
+        if (stru_C0BC[var_2].rect.top <= arg_2 && stru_C0BC[var_2].rect.top > arg_4 && stru_C0BC[var_2].rect.left < arg_8 && stru_C0BC[var_2].rect.right > arg_6 && stru_C0BC[var_2].rect.top > SCREEN_TOP + 10) {
             for (var_4 = 0; var_4 < var_2; var_4 += 1) {
                 if (stru_C0BC[var_4].rect.left <= arg_6 && stru_C0BC[var_4].rect.right >= arg_8 && stru_C0BC[var_4].rect.top <= arg_4 && stru_C0BC[var_4].rect.bottom >= arg_2) {
                     break;
@@ -2231,9 +2813,15 @@ int sub_408C(HWND * arg_0, int arg_2, int arg_4, int arg_6, int arg_8)
             }
         }
     }
-    if (arg_2 >= word_CA52 && arg_4 <= word_CA52) {
+    if (!scmpoo_get_monitor_rect((arg_6 + arg_8) / 2, arg_4, &monitor_rect)) {
+        monitor_rect.left = SCREEN_LEFT;
+        monitor_rect.top = SCREEN_TOP;
+        monitor_rect.right = SCREEN_RIGHT;
+        monitor_rect.bottom = SCREEN_BOTTOM;
+    }
+    if (arg_2 >= monitor_rect.bottom && arg_4 <= monitor_rect.bottom) {
         *arg_0 = NULL;
-        return word_CA52;
+        return monitor_rect.bottom;
     }
     return 0;
 }
@@ -2242,13 +2830,17 @@ int sub_408C(HWND * arg_0, int arg_2, int arg_4, int arg_6, int arg_8)
 int sub_419E(HWND arg_0, int arg_2, int arg_4, int arg_6, int arg_8)
 {
     RECT var_8;
+    RECT monitor_rect;
     if (IsWindow(arg_0)) {
         GetWindowRect(arg_0, &var_8);
         if (var_8.top <= arg_2 && var_8.top > arg_4 && var_8.left < arg_8 && var_8.right > arg_6) {
             return var_8.top;
         }
     }
-    if (arg_2 > word_CA52) {
+    if (!scmpoo_get_monitor_rect((arg_6 + arg_8) / 2, arg_4, &monitor_rect)) {
+        monitor_rect.bottom = SCREEN_BOTTOM;
+    }
+    if (arg_2 > monitor_rect.bottom) {
         return -1;
     }
     return 0;
@@ -2259,26 +2851,26 @@ void sub_4210(int arg_0, UINT arg_2, WORD arg_4)
 {
     LPCSTR lpszSoundName;
     if (word_A82E != NULL) {
-        sndPlaySound(NULL, SND_SYNC);
+        sndPlaySoundA(NULL, SND_SYNC);
         GlobalUnlock(word_A82E);
         FreeResource(word_A82E);
         word_A82E = NULL;
     }
     word_A82E = LoadResource(word_CA58, FindResource(word_CA58, MAKEINTRESOURCE(arg_0), "WAVE"));
     lpszSoundName = LockResource(word_A82E);
-    sndPlaySound(lpszSoundName, arg_2 | (SND_ASYNC | SND_MEMORY));
+    sndPlaySoundA(lpszSoundName, arg_2 | (SND_ASYNC | SND_MEMORY));
 }
 
 /* Stop playing sound. */
 void sub_428E(void)
 {
-    sndPlaySound(NULL, SND_SYNC);
+    sndPlaySoundA(NULL, SND_SYNC);
 }
 
 /* Play sound by name. */
-void sub_42AA(LPCSTR lpszSoundName)
+void sub_42AA(LPCWSTR lpszSoundName)
 {
-    sndPlaySound(lpszSoundName, SND_ASYNC);
+    sndPlaySoundW(lpszSoundName, SND_ASYNC);
 }
 
 /* Play sound by resource ID and additional flags (when option "Cry" enabled). */
@@ -2340,16 +2932,16 @@ void sub_44ED(void)
 /* Turn around when approaching screen border or otherwise with 1/20 probability.  */
 void sub_4559(void)
 {
-    if (word_A2AA > 0 && word_A800 < 0) {
+    if (word_A2AA > 0 && word_A800 < SCREEN_LEFT) {
         word_A8A0 = 24;
     }
-    if (word_A2AA < 0 && word_CA50 - stru_A8A2[word_A804].width < word_A800) {
+    if (word_A2AA < 0 && SCREEN_RIGHT - stru_A8A2[word_A804].width < word_A800) {
         word_A8A0 = 24;
     }
-    if (word_A2AA > 0 && word_CA50 - stru_A8A2[word_A804].width > word_A800 && rand() % 20 == 0) {
+    if (word_A2AA > 0 && SCREEN_RIGHT - stru_A8A2[word_A804].width > word_A800 && rand() % 20 == 0) {
         word_A8A0 = 24;
     }
-    if (word_A2AA < 0 && word_A800 > 0 && rand() % 20 == 0) {
+    if (word_A2AA < 0 && word_A800 > SCREEN_LEFT && rand() % 20 == 0) {
         word_A8A0 = 24;
     }
 }
@@ -2358,18 +2950,18 @@ void sub_4559(void)
 void sub_4614(BOOL arg_0)
 {
     if (word_A7FC == 0) {
-        if (word_A2AA > 0 && word_A800 < 0) {
+        if (word_A2AA > 0 && word_A800 < SCREEN_LEFT) {
             word_A8A0 = 30;
         }
-        if (word_A2AA < 0 && word_CA50 - stru_A8A2[word_A804].width < word_A800) {
+        if (word_A2AA < 0 && SCREEN_RIGHT - stru_A8A2[word_A804].width < word_A800) {
             word_A8A0 = 30;
         }
     }
     if (arg_0) {
-        if (word_A2AA > 0 && word_CA50 - 80 > word_A800 && rand() % 20 == 0) {
+        if (word_A2AA > 0 && SCREEN_RIGHT - 80 > word_A800 && rand() % 20 == 0) {
             word_A8A0 = 24;
         }
-        if (word_A2AA < 0 && word_A800 > 40 && rand() % 20 == 0) {
+        if (word_A2AA < 0 && word_A800 > SCREEN_LEFT + 40 && rand() % 20 == 0) {
             word_A8A0 = 24;
         }
     }
@@ -2427,8 +3019,8 @@ void sub_46F7(void)
 /* Update window position and sprite to be painted. */
 void sub_4807(int arg_0, int arg_2, int arg_4)
 {
-    SetWindowWord(word_C0B0, 0, (short)word_A800);
-    SetWindowWord(word_C0B0, 2, (short)word_A802);
+    SetWindowLongPtr(word_C0B0, 0, (LONG_PTR)word_A800);
+    SetWindowLongPtr(word_C0B0, (int)sizeof(LONG_PTR), (LONG_PTR)word_A802);
     if (arg_4 >= 9 && arg_4 <= 14) {
         sub_31A8(arg_0, arg_2, arg_4);
     } else if (word_A2AA > 0) {
@@ -2464,10 +3056,15 @@ BOOL sub_48F3(HWND arg_0)
 void sub_491D(HWND arg_0, LPRECT arg_2)
 {
     if (arg_0 == NULL) {
-        arg_2->left = 0;
-        arg_2->right = word_CA50;
-        arg_2->top = word_CA52;
-        arg_2->bottom = word_CA52 * 2;
+        if (!scmpoo_get_monitor_rect(word_A800 + 20, word_A802 + 20, arg_2)) {
+            arg_2->left = SCREEN_LEFT;
+            arg_2->right = SCREEN_RIGHT;
+            arg_2->top = SCREEN_BOTTOM;
+            arg_2->bottom = SCREEN_BOTTOM + SCREEN_HEIGHT;
+        } else {
+            arg_2->top = arg_2->bottom;
+            arg_2->bottom += SCREEN_HEIGHT;
+        }
     } else {
         GetWindowRect(arg_0, arg_2);
     }
@@ -2518,7 +3115,7 @@ void sub_496F(int arg_0)
                 word_A800 = var_8.right - 30;
                 return;
             }
-            if (rand() % 20 - 1 == 0 && word_CA52 - word_A802 > 100) {
+            if (rand() % 20 - 1 == 0 && SCREEN_BOTTOM - word_A802 > 100) {
                 word_A8A0 = 104;
                 return;
             }
@@ -2530,7 +3127,7 @@ void sub_496F(int arg_0)
             }
         }
     }
-    if (stru_A8A2[word_A804].width + word_A800 < 0 || word_A800 > word_CA50) {
+    if (stru_A8A2[word_A804].width + word_A800 < SCREEN_LEFT || word_A800 > SCREEN_RIGHT) {
         word_A8A0 = 0;
         return;
     }
@@ -2624,8 +3221,8 @@ loc_4D33:
     case 0:
         word_A7FC = 0;
         srand((unsigned int)GetTickCount());
-        word_A800 = -80;
-        word_A802 = -80;
+        word_A800 = SCREEN_LEFT - 80;
+        word_A802 = SCREEN_TOP - 80;
         word_A8A0 = 1;
     case 1:
         word_A844 = 0;
@@ -2649,15 +3246,15 @@ loc_4D33:
             break;
         }
         word_A8A0 = word_A15A[rand() % 80];
-        if (word_A800 > word_CA50 || word_A800 < -40 || word_A802 < -40 || word_A802 > word_CA52) {
+        if (word_A800 > SCREEN_RIGHT || word_A800 < SCREEN_LEFT - 40 || word_A802 < SCREEN_TOP - 40 || word_A802 > SCREEN_BOTTOM) {
             if ((rand() & 1) == 0) {
                 word_A2AA = 1;
-                word_A800 = word_CA50 + word_CA4C;
-                word_A802 = rand() % (word_CA52 - 64) + word_CA4E;
+                word_A800 = SCREEN_RIGHT;
+                word_A802 = rand() % (SCREEN_HEIGHT - 64) + SCREEN_TOP;
             } else {
                 word_A2AA = -1;
-                word_A800 = -40;
-                word_A802 = rand() % (word_CA52 - 64) + word_CA4E;
+                word_A800 = SCREEN_LEFT - 40;
+                word_A802 = rand() % (SCREEN_HEIGHT - 64) + SCREEN_TOP;
             }
             word_A8A0 = 11;
         }
@@ -2672,7 +3269,7 @@ loc_4D33:
             break;
         }
         word_A8A0 = word_A1FA[rand() % 80];
-        if (word_A800 > word_CA50 || word_A800 < -40 || word_A802 < -40 || word_A802 > word_CA52) {
+        if (word_A800 > SCREEN_RIGHT || word_A800 < SCREEN_LEFT - 40 || word_A802 < SCREEN_TOP - 40 || word_A802 > SCREEN_BOTTOM) {
             if (rand() % 10 == 0 && word_CA3C == 0) {
                 word_A8A0 = 6;
                 break;
@@ -2683,12 +3280,12 @@ loc_4D33:
                 goto loc_4D33;
             }
             sub_491D(word_A81C, &stru_A81E);
-            if (stru_A81E.top < 10) {
+            if (stru_A81E.top < SCREEN_TOP + 10) {
                 word_A8A0 = 3;
                 goto loc_4D33;
             }
             word_A800 = (rand() % stru_A81E.right - stru_A81E.left) / 3 + (stru_A81E.right - stru_A81E.left) / 2 + stru_A81E.left - 20;
-            word_A802 = -40;
+            word_A802 = SCREEN_TOP - 40;
             word_A840 = 0;
             word_A806 = 0;
             word_A808 = 0;
@@ -2702,8 +3299,8 @@ loc_4D33:
         break;
     case 3:
         word_A7FC = 1;
-        word_A800 = rand() % (word_CA50 - 40);
-        word_A802 = -(rand() % 20 - (-40));
+        word_A800 = SCREEN_LEFT + rand() % (SCREEN_WIDTH - 40);
+        word_A802 = SCREEN_TOP - rand() % 20 - 40;
         word_A840 = 0;
         word_A806 = 0;
         word_A808 = 0;
@@ -2718,7 +3315,7 @@ loc_4D33:
     case 154:
         break;
     case 4:
-        if (word_CA50 / 2 - 20 > word_A800) {
+        if (SCREEN_CENTER_X - 20 > word_A800) {
             word_A2AA = 1;
         } else {
             word_A2AA = -1;
@@ -2735,7 +3332,7 @@ loc_4D33:
         word_A800 -= word_A2AA * 16;
         word_A804 = word_A804 == 4 ? 5 : 4;
         sub_4807(word_A800, word_A802, word_A804);
-        if (word_A800 < -40 || word_A800 > word_CA50) {
+        if (word_A800 < SCREEN_LEFT - 40 || word_A800 > SCREEN_RIGHT) {
             word_A8A0 = 6;
         }
         break;
@@ -3152,7 +3749,7 @@ loc_4D33:
             word_A8A0 = 69;
             break;
         }
-        if (word_A800 > word_CA50 || word_A800 < -40) {
+        if (word_A800 > SCREEN_RIGHT || word_A800 < SCREEN_LEFT - 40) {
             word_A8A0 = 1;
         }
         sub_4C21(word_A2AA * 8 + word_A800, -(word_A2AA * 8 - word_A800), 2);
@@ -3544,10 +4141,10 @@ loc_4D33:
         word_A800 -= word_A2AA * 8;
         word_A804 = word_A524[word_A826 % 8];
         sub_4807(word_A800, word_A802, word_A804);
-        if (word_A2AA > 0 && word_A800 < 0) {
+        if (word_A2AA > 0 && word_A800 < SCREEN_LEFT) {
             word_A8A0 = 30;
         }
-        if (word_A2AA < 0 && word_CA50 - stru_A8A2[word_A804].width < word_A800) {
+        if (word_A2AA < 0 && SCREEN_RIGHT - stru_A8A2[word_A804].width < word_A800) {
             word_A8A0 = 30;
         }
         if (--word_A828 <= 0) {
@@ -3762,7 +4359,7 @@ loc_4D33:
             break;
         }
         sub_491D(word_A81C, &stru_A81E);
-        if (stru_A81E.top < 10) {
+        if (stru_A81E.top < SCREEN_TOP + 10) {
             word_A8A0 = 1;
             break;
         }
@@ -3772,7 +4369,7 @@ loc_4D33:
         }
         word_A83C = (rand() % stru_A81E.right - stru_A81E.left) / 3 + (stru_A81E.right - stru_A81E.left) / 2 + stru_A81E.left - 20;
         word_A83E = stru_A81E.top - 40;
-        if (word_CA50 / 2 - 20 > word_A800) {
+        if (SCREEN_CENTER_X - 20 > word_A800) {
             word_A2AA = 1;
         } else {
             word_A2AA = -1;
@@ -3789,7 +4386,7 @@ loc_4D33:
         word_A800 -= word_A2AA * 16;
         word_A804 = word_A804 == 4 ? 5 : 4;
         sub_4807(word_A800, word_A802, word_A804);
-        if (word_A800 < -40 || word_A800 > word_CA50) {
+        if (word_A800 < SCREEN_LEFT - 40 || word_A800 > SCREEN_RIGHT) {
             if (!sub_48F3(word_A81C)) {
                 word_A8A0 = 1;
                 break;
@@ -3802,7 +4399,7 @@ loc_4D33:
             word_A8A0 = 92;
             word_A7FC = 1;
             word_A800 = word_A83C;
-            word_A802 = -40;
+            word_A802 = SCREEN_TOP - 40;
             word_A806 = 0;
             word_A808 = 0;
             word_A842 = rand() % 2;
@@ -3994,7 +4591,7 @@ loc_4D33:
         word_A80C = word_A802;
         word_A800 += word_A808;
         word_A802 += word_A806;
-        if (word_A80C > word_CA52) {
+        if (word_A80C > SCREEN_BOTTOM) {
             sub_4807(word_A800, word_A802, word_A804);
             word_A8A0 = 0;
             break;
@@ -4290,8 +4887,8 @@ loc_4D33:
         sub_4807(word_A800, word_A802, word_A804);
         break;
     case 116:
-        word_A800 = word_CA50;
-        word_A802 = word_CA52 * 7 / 8;
+        word_A800 = SCREEN_RIGHT;
+        word_A802 = SCREEN_POINT_Y(7, 8);
         word_A804 = 4;
         word_A2AA = 1;
         sub_4807(word_A800, word_A802, word_A804);
@@ -4305,15 +4902,15 @@ loc_4D33:
         word_A800 -= word_A2AA * 16;
         word_A804 = word_A804 == 4 ? 5 : 4;
         sub_4807(word_A800, word_A802, word_A804);
-        if (word_CA50 / 2 - 20 >= word_A800) {
+        if (SCREEN_CENTER_X - 20 >= word_A800) {
             word_A8A0 = 118;
         }
         break;
     case 118:
         sub_2A21();
         word_A2AC = -1;
-        word_A80E = -40;
-        word_A810 = word_CA52 / 8;
+        word_A80E = SCREEN_LEFT - 40;
+        word_A810 = SCREEN_POINT_Y(1, 8);
         word_A812 = 154;
         word_A826 = 0;
         word_A8A0 = 119;
@@ -4347,7 +4944,7 @@ loc_4D33:
             word_A2AA = -1;
             sub_4807(word_A800, word_A802, word_A804);
         }
-        if (word_A80E > word_CA50) {
+        if (word_A80E > SCREEN_RIGHT) {
             sub_2A96();
             word_A8A0 = 120;
         }
@@ -4360,19 +4957,19 @@ loc_4D33:
         word_A800 -= word_A2AA * 16;
         word_A804 = word_A804 == 4 ? 5 : 4;
         sub_4807(word_A800, word_A802, word_A804);
-        if (word_A800 > word_CA50) {
+        if (word_A800 > SCREEN_RIGHT) {
             word_A8A0 = 1;
         }
         break;
     case 121:
-        word_A800 = word_CA50;
-        word_A802 = word_CA52 * 7 / 8;
+        word_A800 = SCREEN_RIGHT;
+        word_A802 = SCREEN_POINT_Y(7, 8);
         word_A804 = 4;
         word_A2AA = 1;
         sub_2A21();
         word_A2AC = -1;
-        word_A80E = -40;
-        word_A810 = word_CA52 * 7 / 8;
+        word_A80E = SCREEN_LEFT - 40;
+        word_A810 = SCREEN_POINT_Y(7, 8);
         word_A812 = 154;
         sub_4807(word_A800, word_A802, word_A804);
         sub_488C(word_A80E, word_A810, word_A812);
@@ -4391,8 +4988,8 @@ loc_4D33:
         word_A80E -= word_A2AC * 16;
         word_A812 = word_A812 == 154 ? 155 : 154;
         if (word_A800 - word_A80E <= 46) {
-            word_A800 = word_CA50 / 2 + 3;
-            word_A80E = word_CA50 / 2 - 43;
+            word_A800 = SCREEN_CENTER_X + 3;
+            word_A80E = SCREEN_CENTER_X - 43;
             word_A804 = 3;
             word_A812 = 157;
             sub_4807(word_A800, word_A802, word_A804);
@@ -4438,14 +5035,14 @@ loc_4D33:
         sub_4807(word_A800, word_A802, word_A804);
         break;
     case 126:
-        word_A800 = word_CA50;
-        word_A802 = word_CA52 * 7 / 8;
+        word_A800 = SCREEN_RIGHT;
+        word_A802 = SCREEN_POINT_Y(7, 8);
         word_A804 = 4;
         word_A2AA = 1;
         sub_2A21();
         word_A2AC = 1;
-        word_A80E = word_CA50 + 46;
-        word_A810 = word_CA52 * 7 / 8;
+        word_A80E = SCREEN_RIGHT + 46;
+        word_A810 = SCREEN_POINT_Y(7, 8);
         word_A812 = 154;
         sub_4807(word_A800, word_A802, word_A804);
         sub_488C(word_A80E, word_A810, word_A812);
@@ -4463,7 +5060,7 @@ loc_4D33:
         word_A804 = word_A804 == 4 ? 5 : 4;
         word_A80E -= word_A2AC * 16;
         word_A812 = word_A812 == 154 ? 155 : 154;
-        if (word_A80E < -40) {
+        if (word_A80E < SCREEN_LEFT - 40) {
             sub_2A96();
             word_A8A0 = 1;
         } else {
@@ -4472,8 +5069,8 @@ loc_4D33:
         }
         break;
     case 128:
-        word_A800 = word_CA50;
-        word_A802 = word_CA52 * 7 / 8;
+        word_A800 = SCREEN_RIGHT;
+        word_A802 = SCREEN_POINT_Y(7, 8);
         word_A804 = 4;
         word_A2AA = 1;
         sub_4807(word_A800, word_A802, word_A804);
@@ -4487,15 +5084,15 @@ loc_4D33:
         word_A800 -= word_A2AA * 16;
         word_A804 = word_A804 == 4 ? 5 : 4;
         sub_4807(word_A800, word_A802, word_A804);
-        if (word_CA50 / 2 - 20 >= word_A800) {
+        if (SCREEN_CENTER_X - 20 >= word_A800) {
             word_A8A0 = 130;
         }
         break;
     case 130:
         sub_2A21();
         word_A2AC = -1;
-        word_A80E = -40;
-        word_A810 = word_CA52 / 8;
+        word_A80E = SCREEN_LEFT - 40;
+        word_A810 = SCREEN_POINT_Y(1, 8);
         word_A812 = 158;
         word_A826 = 0;
         word_A8A0 = 131;
@@ -4578,7 +5175,7 @@ loc_4D33:
         }
         break;
     case 134:
-        word_A800 = -80;
+        word_A800 = SCREEN_LEFT - 80;
         sub_4807(word_A800, word_A802, word_A804);
         word_A80E -= word_A2AC * 16;
         if (word_A812 == 161) {
@@ -4586,7 +5183,7 @@ loc_4D33:
         } else {
             word_A812 += 1;
         }
-        if (word_A80E > word_CA50) {
+        if (word_A80E > SCREEN_RIGHT) {
             sub_2A96();
             sub_428E();
             word_A8A0 = 1;
@@ -4595,10 +5192,10 @@ loc_4D33:
         sub_488C(word_A80E, word_A810, word_A812);
         break;
     case 135:
-        word_A810 = word_CA52 * 7 / 8;
+        word_A810 = SCREEN_POINT_Y(7, 8);
         word_A2AA = -1;
-        word_A800 = -40;
-        word_A802 = word_CA52 / 8;
+        word_A800 = SCREEN_LEFT - 40;
+        word_A802 = SCREEN_POINT_Y(1, 8);
         word_A804 = 158;
         word_A826 = 0;
         word_A8A0 = 136;
@@ -4610,8 +5207,8 @@ loc_4D33:
         } else {
             word_A804 += 1;
         }
-        if (word_CA50 / 2 - 20 < word_A800) {
-            word_A800 = word_CA50 / 2 - 20;
+        if (SCREEN_CENTER_X - 20 < word_A800) {
+            word_A800 = SCREEN_CENTER_X - 20;
             word_A804 = 162;
             word_A8A0 = 137;
         }
@@ -4669,7 +5266,7 @@ loc_4D33:
                 word_A804 += 1;
             }
         }
-        if (word_A800 > word_CA50) {
+        if (word_A800 > SCREEN_RIGHT) {
             word_A8A0 = 140;
         }
         sub_4807(word_A800, word_A802, word_A804);
@@ -4697,13 +5294,13 @@ loc_4D33:
     case 141:
         break;
     case 142:
-        word_A800 = -80;
-        word_A802 = word_CA52 / 8;
+        word_A800 = SCREEN_LEFT - 80;
+        word_A802 = SCREEN_POINT_Y(1, 8);
         sub_4807(word_A800, word_A802, word_A804);
         sub_2A21();
         word_A2AC = -1;
-        word_A80E = -40;
-        word_A810 = word_CA52 * 7 / 8;
+        word_A80E = SCREEN_LEFT - 40;
+        word_A810 = SCREEN_POINT_Y(7, 8);
         word_A812 = 158;
         word_A826 = 0;
         word_A8A0 = 143;
@@ -4718,9 +5315,9 @@ loc_4D33:
         } else {
             word_A812 += 1;
         }
-        if (word_CA52 / 8 < word_A80E) {
-            word_A80E = word_CA52 / 8;
-            word_A800 = word_CA50;
+        if (SCREEN_LEFT + SCREEN_HEIGHT / 8 < word_A80E) {
+            word_A80E = SCREEN_LEFT + SCREEN_HEIGHT / 8;
+            word_A800 = SCREEN_RIGHT;
             word_A802 = word_A810;
             word_A804 = 4;
             word_A2AA = 1;
@@ -4743,7 +5340,7 @@ loc_4D33:
         word_A804 = word_A804 == 4 ? 5 : 4;
         sub_4807(word_A800, word_A802, word_A804);
         if (word_A80E + 40 >= word_A800) {
-            word_A800 = -80;
+            word_A800 = SCREEN_LEFT - 80;
             sub_4807(word_A800, word_A802, word_A804);
             word_A8A0 = 145;
         }
@@ -4755,7 +5352,7 @@ loc_4D33:
         } else {
             word_A812 += 1;
         }
-        if (word_A810 < -40) {
+        if (word_A810 < SCREEN_TOP - 40) {
             sub_2A96();
             sub_428E();
             word_A8A0 = 1;
@@ -4771,13 +5368,13 @@ loc_4D33:
         word_A2AC = 1;
         word_A812 = 146;
         word_A826 = 0;
-        word_A800 = word_CA50;
-        word_A802 = -40;
+        word_A800 = SCREEN_RIGHT;
+        word_A802 = SCREEN_TOP - 40;
         word_A2AA = 1;
-        word_A808 = word_CA50 / -96;
-        word_A806 = word_CA52 / 96;
-        word_A80E = word_A808 * 92 + word_CA50;
-        word_A810 = word_A806 * 92 - 20;
+        word_A808 = SCREEN_WIDTH / -96;
+        word_A806 = SCREEN_HEIGHT / 96;
+        word_A80E = word_A808 * 92 + SCREEN_RIGHT;
+        word_A810 = SCREEN_TOP + word_A806 * 92 - 20;
         word_A8A0 = 148;
         word_C0AE = 1;
         sub_2ABF(word_CA60[8]);
@@ -4815,7 +5412,7 @@ loc_4D33:
             break;
         }
         word_A83A = 0;
-        word_A800 = -80;
+        word_A800 = SCREEN_LEFT - 80;
         sub_4807(word_A800, word_A802, word_A804);
         word_A812 = word_A494[word_A826];
         word_A826 += 1;
@@ -4852,7 +5449,7 @@ loc_4D33:
         word_A800 -= word_A2AA * 6;
         word_A804 = word_A804 == 2 ? 3 : 2;
         sub_4807(word_A800, word_A802, word_A804);
-        if (word_A800 < -40) {
+        if (word_A800 < SCREEN_LEFT - 40) {
             sub_2A96();
             word_A8A0 = 1;
             break;
@@ -5027,10 +5624,7 @@ BOOL sub_9200(HWND arg_0)
     if (word_A85C == NULL) {
         goto loc_92FA;
     }
-    word_CA4C = 0;
-    word_CA4E = 0;
-    word_CA50 = GetSystemMetrics(SM_CXSCREEN);
-    word_CA52 = GetSystemMetrics(SM_CYSCREEN);
+    scmpoo_update_virtual_desktop();
     ReleaseDC(arg_0, var_2);
     word_CA46 = 0;
     word_CA5C = 0;
@@ -5187,7 +5781,12 @@ void sub_9438(HWND arg_0)
         }
         word_A870 = 1;
         word_CA5E = 1;
-        MoveWindow(arg_0, word_A880, word_A882, word_A884, word_A886 + word_CA5C, TRUE);
+        MoveWindow(arg_0, word_A880, word_A882, word_A884, word_A886 + word_CA5C, FALSE);
+        if (word_CA46 != 0 && word_A858 != NULL) {
+            scmpoo_apply_sprite_region(arg_0, word_A85C, 0, 0, word_A87C, word_A87E, var_16, var_14, word_CA5C);
+        } else {
+            scmpoo_apply_sprite_region(arg_0, word_A858, word_A85E, word_A860, word_A87C, word_A87E, var_16, var_14, word_CA5C);
+        }
         word_CA5E = 0;
     }
     DeleteDC(var_4);
@@ -5229,13 +5828,13 @@ BOOL sub_9A49(HWND arg_0)
     BitBlt(var_2, 0, 0, word_A884, word_A886, var_4, 0, 0, SRCCOPY);
     if (word_CA5C != 0) {
         if (word_C0B8 == NULL) {
-            word_C0B8 = CreateCompatibleBitmap(var_2, 40, word_CA52 * 4 / 5);
+            word_C0B8 = CreateCompatibleBitmap(var_2, 40, SCREEN_HEIGHT * 4 / 5);
             if (word_C0B8 == NULL) {
                 goto loc_9CC3;
             }
         }
         if (word_C0B2 == NULL) {
-            word_C0B2 = CreateCompatibleBitmap(var_2, 40, word_CA52 * 4 / 5);
+            word_C0B2 = CreateCompatibleBitmap(var_2, 40, SCREEN_HEIGHT * 4 / 5);
             if (word_C0B2 == NULL) {
                 goto loc_9CC3;
             }

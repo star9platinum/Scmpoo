@@ -22,7 +22,13 @@ Drag Poe with left/right mouse button to move him to an arbitrary position in th
 
 Drag a file onto Poe and he will "eat" the file. If the file is a Waveform Audio (.wav), the sound contained will be played.
 
-Double-click with left mouse button to bring up a configuration window. Four options can be modified and will be saved upon clicking "OK" button. Since the application tries to write to a .ini file in Windows directory, administrator privilege is required for the program on Windows Vista and above to save the options. You can exit the instance from the configuration window.
+Double-click with left mouse button to bring up a configuration window. The original application stored four options in an INI file under the Windows directory and consequently required administrator privileges on Windows Vista and above. You can exit the instance from the configuration window.
+
+This modernized branch uses a Unicode Simplified Chinese settings window and stores configuration in `%LOCALAPPDATA%\Scmpoo\settings.ini`, so administrator privileges are no longer required. In addition to the four original options, it provides animation speed, always-on-top behavior, an owner name, rest reminders, speech bubbles, and buttons for previewing the original flower, burn/bathtub, black sheep, UFO, and fall sequences. Run `Scmpoo.exe --settings` to open the settings window immediately.
+
+The animation engine now uses the complete Windows virtual desktop, including monitors positioned to the left or above the primary display, and declares Per-Monitor V2 DPI awareness. Original 40-by-40 sprite frames and the reconstructed 153-state behavior machine remain unchanged.
+
+Sprite windows are clipped with the original monochrome frame masks, so unused pixels are genuinely transparent and do not intercept mouse input. This applies to Poe, Merry, the black-sheep sequence, and the UFO effect while preserving the original crisp pixel edges.
 
 Double-click with right mouse button exits the instance.
 

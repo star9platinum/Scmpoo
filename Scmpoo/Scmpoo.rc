@@ -21,7 +21,7 @@ LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
 
 106 CURSOR MOVEABLE PURE "106.cur"
 
-107 DIALOGEX 0, 0, 370, 270
+107 DIALOGEX 0, 0, 370, 292
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Screen Mate 小羊设置"
 FONT 9, "Microsoft YaHei UI", 400, 0, 0x86
@@ -33,7 +33,7 @@ BEGIN
     CONTROL "始终启用重力和窗口落脚", 1004, "BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, 142, 44, 116, 12
     LTEXT "保持原版随机概率、窗口碰撞、边缘探望、悬挂、掉落和特殊事件逻辑。", -1, 18, 64, 232, 12
 
-    GROUPBOX "现代 Windows 扩展", -1, 8, 92, 258, 104
+    GROUPBOX "现代 Windows 扩展", -1, 8, 92, 258, 124
     LTEXT "你的称呼：", -1, 18, 110, 52, 12
     EDITTEXT 1007, 72, 107, 178, 15, ES_AUTOHSCROLL
     LTEXT "动画速度：", -1, 18, 132, 52, 12
@@ -42,22 +42,26 @@ BEGIN
     LTEXT "休息提醒：", -1, 18, 154, 52, 12
     EDITTEXT 1009, 72, 151, 40, 15, ES_NUMBER | ES_RIGHT
     LTEXT "分钟（5–240）", -1, 116, 154, 78, 12
-    CONTROL "始终显示在其他窗口上方（固定）", 1005, "BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, 18, 176, 124, 12
-    CONTROL "显示 Unicode 对话和提醒气泡", 1006, "BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, 142, 176, 118, 12
+    LTEXT "特殊动画：", -1, 18, 176, 52, 12
+    EDITTEXT 1011, 72, 173, 40, 15, ES_NUMBER | ES_RIGHT
+    LTEXT "%（0–500）", -1, 116, 176, 72, 12
+    CONTROL "始终显示在其他窗口上方", 1005, "BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, 18, 198, 118, 12
+    CONTROL "显示 Unicode 对话和提醒气泡", 1006, "BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX, 142, 198, 118, 12
 
-    GROUPBOX "立即播放原版动作", -1, 8, 202, 354, 38
-    PUSHBUTTON "吃花", 1101, 17, 217, 58, 15
-    PUSHBUTTON "燃烧浴盆", 1102, 84, 217, 58, 15
-    PUSHBUTTON "黑羊", 1103, 151, 217, 58, 15
-    PUSHBUTTON "UFO", 1104, 218, 217, 58, 15
-    PUSHBUTTON "落下", 1105, 285, 217, 58, 15
+    GROUPBOX "立即播放原版动作", -1, 8, 222, 354, 38
+    PUSHBUTTON "吃花", 1101, 17, 237, 58, 15
+    PUSHBUTTON "燃烧浴盆", 1102, 84, 237, 58, 15
+    PUSHBUTTON "黑羊", 1103, 151, 237, 58, 15
+    PUSHBUTTON "UFO", 1104, 218, 237, 58, 15
+    PUSHBUTTON "落下", 1105, 285, 237, 58, 15
 
     DEFPUSHBUTTON "确定", IDOK, 280, 12, 78, 18
     PUSHBUTTON "取消", IDCANCEL, 280, 36, 78, 18
     PUSHBUTTON "恢复默认", 1010, 280, 60, 78, 18
     PUSHBUTTON "帮助", IDRETRY, 280, 84, 78, 18
     PUSHBUTTON "结束小羊", IDABORT, 280, 108, 78, 18
-    LTEXT "设置以 Unicode 保存到当前用户目录，不再写入 Windows 目录，也不需要管理员权限。", -1, 12, 247, 346, 18
+    PUSHBUTTON "关闭所有小羊", 1110, 280, 132, 78, 18
+    LTEXT "设置以 Unicode 保存到当前用户目录，不再写入 Windows 目录，也不需要管理员权限。", -1, 12, 267, 346, 18
 END
 
 108 DIALOG MOVEABLE PURE 0, 0, 178, 133

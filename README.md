@@ -26,7 +26,7 @@ Double-click with left mouse button to bring up a configuration window. The orig
 
 This modernized branch uses a Unicode Simplified Chinese settings window and stores configuration in `%LOCALAPPDATA%\Scmpoo\settings.ini`, so administrator privileges are no longer required. In addition to the four original options, it provides animation speed, always-on-top behavior, an owner name, rest reminders, speech bubbles, and buttons for previewing the original flower, burn/bathtub, black sheep, UFO, and fall sequences. Run `Scmpoo.exe --settings` to open the settings window immediately.
 
-The animation engine now uses the complete Windows virtual desktop, including monitors positioned to the left or above the primary display, and declares Per-Monitor V2 DPI awareness. Original 40-by-40 sprite frames and the reconstructed 153-state behavior machine remain unchanged.
+The animation engine now uses the complete Windows virtual desktop, including monitors positioned to the left or above the primary display, and declares Per-Monitor V2 DPI awareness. Each monitor's usable work area is treated as the floor, so Poe lands above its taskbar instead of falling behind it. Original 40-by-40 sprite frames and the reconstructed 153-state behavior machine remain unchanged.
 
 Sprite windows are clipped with the original monochrome frame masks, so unused pixels are genuinely transparent and do not intercept mouse input. This applies to Poe, Merry, the black-sheep sequence, and the UFO effect while preserving the original crisp pixel edges.
 

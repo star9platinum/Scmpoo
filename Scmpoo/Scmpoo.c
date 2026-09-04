@@ -1116,6 +1116,8 @@ void scmpoo_update_virtual_desktop(void)
     }
 }
 
+/* Return the usable area of the monitor containing the sheep. Using rcWork
+ * keeps the desktop floor above taskbars and other reserved app bars. */
 BOOL scmpoo_get_monitor_rect(int x, int y, LPRECT rect)
 {
     POINT point;
@@ -1131,7 +1133,7 @@ BOOL scmpoo_get_monitor_rect(int x, int y, LPRECT rect)
     if (!GetMonitorInfo(monitor, &info)) {
         return FALSE;
     }
-    *rect = info.rcMonitor;
+    *rect = info.rcWork;
     return TRUE;
 }
 

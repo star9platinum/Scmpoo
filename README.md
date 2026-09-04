@@ -16,7 +16,7 @@ Poe appears on desktop and normally chooses random actions (most likely run or w
 
 Poe will react to visible windows under certain circumstances. For example, Poe may collide with a visible window when running and switch to collision actions, or may fall onto the top edge of a visible window when gravity is enabled.
 
-Up to 9 instances can be run simultaneously. An error message will appear when trying to run another instance exceeding that number. When there are multiple instances, one may collide with another and both will switch to collision actions.
+Up to 32 instances can be run simultaneously. Instances discover one another through top-level windows and exchange window handles with `WM_USER` messages; their positions are then used by the original collision state machine. An error message will appear when trying to run another instance exceeding that number. When there are multiple instances, one may collide with another and both will switch to collision actions.
 
 Drag Poe with left/right mouse button to move him to an arbitrary position in the screen view.
 

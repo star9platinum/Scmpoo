@@ -15,6 +15,8 @@
 #include <ShlObj.h>
 
 #define SCMPOO_TIMER_BASE_MS 108U
+#define SCMPOO_MAX_INSTANCES 32
+#define SCMPOO_MAX_OTHER_INSTANCES (SCMPOO_MAX_INSTANCES - 1)
 #define SCMPOO_SETTINGS_SECTION L"Scmpoo"
 #define SCMPOO_SETTINGS_DIRECTORY L"Scmpoo"
 #define SCMPOO_SETTINGS_FILE L"settings.ini"
@@ -317,7 +319,8 @@ HINSTANCE word_CA58 = NULL; /* Current instance. */
 UINT word_CA5A = 0U; /* Configuration: Cry */
 int word_CA5C = 0; /* UFO beam height (sub). */
 WORD word_CA5E = 0; /* Unused. */
-HWND word_CA60[9] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}; /* Known instance list. When no other instance exists, [8] is used to store subwindow handle. */
+HWND word_CA60[SCMPOO_MAX_OTHER_INSTANCES] = {NULL}; /* Other sheep discovered through cross-process window messages. */
+HWND scmpoo_subwindow = NULL; /* Temporary black-sheep, bathtub, and UFO companion window. */
 int word_CA72 = 0; /* UFO beam height. */
 int word_CA74 = 0; /* Number of currently visible windows. */
 WORD word_CA76 = 0; /* Sleeping after timeout? */
@@ -336,6 +339,7 @@ DWORD scmpoo_last_activity_tick = 0;
 DWORD scmpoo_last_reminder_tick = 0;
 DWORD scmpoo_speech_deadline = 0;
 HWND scmpoo_speech_window = NULL;
+HANDLE scmpoo_instance_slot = NULL;
 
 #define SCREEN_LEFT (word_CA4C)
 #define SCREEN_TOP (word_CA4E)
@@ -424,6 +428,8 @@ BOOL sub_9A49(HWND);
 HRGN scmpoo_create_sprite_region(HBITMAP, int, int, int, int, int, int);
 void scmpoo_apply_sprite_region(HWND, HBITMAP, int, int, int, int, int, int, int);
 void scmpoo_enable_modern_dpi(void);
+BOOL scmpoo_acquire_instance_slot(void);
+void scmpoo_release_instance_slot(void);
 void scmpoo_update_virtual_desktop(void);
 BOOL scmpoo_get_monitor_rect(int, int, LPRECT);
 void scmpoo_apply_runtime_settings(HWND);
@@ -1101,6 +1107,38 @@ void scmpoo_enable_modern_dpi(void)
     SetProcessDPIAware();
 }
 
+/* Atomically reserve one of the process slots. Named kernel objects avoid the
+ * original startup race where several sheep could scan the desktop before any
+ * of their windows became visible. A crashed process releases its handle
+ * automatically, so slots cannot remain permanently occupied. */
+BOOL scmpoo_acquire_instance_slot(void)
+{
+    WCHAR slot_name[64];
+    HANDLE slot;
+    int index;
+    for (index = 0; index < SCMPOO_MAX_INSTANCES; index += 1) {
+        wsprintfW(slot_name, L"Local\\Scmpoo.InstanceSlot.%d", index);
+        slot = CreateMutexW(NULL, FALSE, slot_name);
+        if (slot == NULL) {
+            continue;
+        }
+        if (GetLastError() != ERROR_ALREADY_EXISTS) {
+            scmpoo_instance_slot = slot;
+            return TRUE;
+        }
+        CloseHandle(slot);
+    }
+    return FALSE;
+}
+
+void scmpoo_release_instance_slot(void)
+{
+    if (scmpoo_instance_slot != NULL) {
+        CloseHandle(scmpoo_instance_slot);
+        scmpoo_instance_slot = NULL;
+    }
+}
+
 /* Refresh the complete virtual desktop, including monitors with negative coordinates. */
 void scmpoo_update_virtual_desktop(void)
 {
@@ -1248,10 +1286,10 @@ void scmpoo_apply_runtime_settings(HWND hWnd)
         SetTimer(hWnd, 1U, scmpoo_timer_interval, NULL);
         SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
     }
-    if (word_CA60[8] != NULL) {
-        KillTimer(word_CA60[8], 1U);
-        SetTimer(word_CA60[8], 1U, scmpoo_timer_interval, NULL);
-        SetWindowPos(word_CA60[8], HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+    if (scmpoo_subwindow != NULL) {
+        KillTimer(scmpoo_subwindow, 1U);
+        SetTimer(scmpoo_subwindow, 1U, scmpoo_timer_interval, NULL);
+        SetWindowPos(scmpoo_subwindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
     }
 }
 
@@ -1317,12 +1355,21 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (ownerwindow == NULL) {
         return 0;
     }
+    if (!scmpoo_acquire_instance_slot()) {
+        MessageBoxW(NULL, L"Screen Mate 最多只能同时运行 32 只小羊。", L"Screen Mate", MB_ICONHAND | MB_OK);
+        DestroyWindow(ownerwindow);
+        return 0;
+    }
     /* Set the visible window to be owned by the hidden top-level window. */
     var_2 = CreateWindowEx(WS_EX_TOPMOST, "ScreenMatePoo", "Screen Mate", WS_POPUP, 0, 0, 0, 0, ownerwindow, NULL, hInstance, NULL);
 #else
     var_2 = CreateWindowEx(WS_EX_TOPMOST, "ScreenMatePoo", "Screen Mate", WS_POPUP, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
 #endif
     if (var_2 == NULL) {
+        scmpoo_release_instance_slot();
+#ifdef _WIN32
+        DestroyWindow(ownerwindow);
+#endif
         return 0;
     }
     ShowWindow(var_2, nShowCmd);
@@ -1337,6 +1384,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 #ifdef _WIN32
     DestroyWindow(ownerwindow);
 #endif
+    scmpoo_release_instance_slot();
     return (int)var_14.wParam;
 }
 
@@ -1370,7 +1418,8 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     switch (uMsg) {
     case WM_CREATE:
         if (!sub_3C20(hWnd)) {
-            MessageBoxW(hWnd, L"Screen Mate 最多只能同时运行 9 只小羊。", L"Screen Mate", MB_ICONHAND | MB_OK);
+            wsprintfW(var_122, L"Screen Mate 最多只能同时运行 %d 只小羊。", SCMPOO_MAX_INSTANCES);
+            MessageBoxW(hWnd, var_122, L"Screen Mate", MB_ICONHAND | MB_OK);
             return -1;
         }
 #ifdef _WIN32
@@ -1411,7 +1460,7 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         scmpoo_apply_runtime_settings(hWnd);
         break;
     case WM_DROPFILES:
-        if (word_CA60[8] == NULL) {
+        if (scmpoo_subwindow == NULL) {
             if (DragQueryFileW((HDROP)wParam, 0U, var_122, 260U) != 0U) {
                 sub_42AA(var_122);
                 sub_8FD7(4);
@@ -1426,14 +1475,14 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case 0x202:
         case 0x205:
             if (word_C0AE != 0) {
-                if (word_CA60[8] != NULL) {
-                    sub_2ABF(word_CA60[8]);
+                if (scmpoo_subwindow != NULL) {
+                    sub_2ABF(scmpoo_subwindow);
                 }
                 sub_2ABF(hWnd);
             } else {
                 sub_2ABF(hWnd);
-                if (word_CA60[8] != NULL) {
-                    sub_2ABF(word_CA60[8]);
+                if (scmpoo_subwindow != NULL) {
+                    sub_2ABF(scmpoo_subwindow);
                 }
             }
             sub_2ABF(hWnd);
@@ -1578,7 +1627,7 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         break;
     case WM_LBUTTONDOWN:
     case WM_RBUTTONDOWN:
-        if (word_CA60[8] != NULL) {
+        if (scmpoo_subwindow != NULL) {
             break;
         }
         if (word_A79E != 0) {
@@ -1656,7 +1705,7 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         scmpoo_close_speech();
         sub_3D12(hWnd);
-        if (word_CA60[8] != NULL) {
+        if (scmpoo_subwindow != NULL) {
             sub_2A96();
         }
         KillTimer(hWnd, 1U);
@@ -1897,19 +1946,19 @@ BOOL CALLBACK sub_292A(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 /* Create subwindow. */
 void sub_2A21(void)
 {
-    if (word_CA60[8] != NULL) {
+    if (scmpoo_subwindow != NULL) {
         return;
     }
 #ifdef _WIN32
     /* Set the visible window to be owned by the hidden top-level window. */
-    word_CA60[8] = CreateWindowEx(WS_EX_TOPMOST, "ScreenMatePooSub", "ScreenMate Sub", WS_POPUP, 0, 0, 0, 0, ownerwindow, NULL, word_CA58, NULL);
+    scmpoo_subwindow = CreateWindowEx(WS_EX_TOPMOST, "ScreenMatePooSub", "ScreenMate Sub", WS_POPUP, 0, 0, 0, 0, ownerwindow, NULL, word_CA58, NULL);
 #else
-    word_CA60[8] = CreateWindowEx(WS_EX_TOPMOST, "ScreenMatePooSub", "ScreenMate Sub", WS_POPUP, 0, 0, 0, 0, NULL, NULL, word_CA58, NULL);
+    scmpoo_subwindow = CreateWindowEx(WS_EX_TOPMOST, "ScreenMatePooSub", "ScreenMate Sub", WS_POPUP, 0, 0, 0, 0, NULL, NULL, word_CA58, NULL);
 #endif
-    if (word_CA60[8] != NULL) {
-        ShowWindow(word_CA60[8], SW_SHOWNA);
-        UpdateWindow(word_CA60[8]);
-        SetWindowPos(word_CA60[8], HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+    if (scmpoo_subwindow != NULL) {
+        ShowWindow(scmpoo_subwindow, SW_SHOWNA);
+        UpdateWindow(scmpoo_subwindow);
+        SetWindowPos(scmpoo_subwindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
     } else {
         word_CA3C = 1;
         sub_4CE1();
@@ -1919,9 +1968,9 @@ void sub_2A21(void)
 /* Destroy subwindow. */
 void sub_2A96(void)
 {
-    if (word_CA60[8] != NULL) {
-        DestroyWindow(word_CA60[8]);
-        word_CA60[8] = NULL;
+    if (scmpoo_subwindow != NULL) {
+        DestroyWindow(scmpoo_subwindow);
+        scmpoo_subwindow = NULL;
     }
 }
 
@@ -2570,7 +2619,7 @@ BOOL sub_39D6(HWND arg_0)
     if (word_CA40 == 0) {
         return FALSE;
     }
-    for (var_2 = 0; var_2 < 8; var_2 += 1) {
+    for (var_2 = 0; var_2 < SCMPOO_MAX_OTHER_INSTANCES; var_2 += 1) {
         if (word_CA60[var_2] == arg_0 && word_CA60[var_2] != NULL) {
             return TRUE;
         }
@@ -2586,7 +2635,7 @@ int sub_3A36(int arg_0, int arg_2, int arg_4, int arg_6)
     int var_6;
     int var_8;
     int var_A;
-    for (var_2 = 0; var_2 < 8; var_2 += 1) {
+    for (var_2 = 0; var_2 < SCMPOO_MAX_OTHER_INSTANCES; var_2 += 1) {
         if (word_CA60[var_2] != NULL) {
             var_4 = (int)GetWindowLongPtr(word_CA60[var_2], 0);
             var_8 = (int)GetWindowLongPtr(word_CA60[var_2], (int)sizeof(LONG_PTR));
@@ -2614,26 +2663,23 @@ void sub_3B4C(HWND arg_0)
     int var_6;
     int var_8;
     char var_48[64];
-    for (var_6 = 0; var_6 < 8; var_6 += 1) {
+    for (var_6 = 0; var_6 < SCMPOO_MAX_OTHER_INSTANCES; var_6 += 1) {
         word_CA60[var_6] = NULL;
     }
     var_2 = GetDesktopWindow();
     var_4 = GW_CHILD;
     var_6 = 0;
     var_8 = 0;
-    while ((var_2 = GetWindow(var_2, var_4)) != NULL && var_6 < 64) {
+    while ((var_2 = GetWindow(var_2, var_4)) != NULL) {
         var_4 = GW_HWNDNEXT;
         if (var_2 == arg_0) {
             continue;
         }
         if ((GetWindowLong(var_2, GWL_STYLE) & WS_VISIBLE) != 0) {
             GetWindowText(var_2, var_48, 16);
-            if (lstrcmp(var_48, "Screen Mate") == 0) {
+            if (lstrcmp(var_48, "Screen Mate") == 0 && var_8 < SCMPOO_MAX_OTHER_INSTANCES) {
                 word_CA60[var_8] = var_2;
                 var_8 += 1;
-                if (var_8 > 8) {
-                    return;
-                }
             }
             var_6 += 1;
         }
@@ -2653,7 +2699,7 @@ BOOL sub_3C20(HWND arg_0)
     var_4 = GW_CHILD;
     var_6 = 0;
     var_8 = 0;
-    while ((var_2 = GetWindow(var_2, var_4)) != NULL && var_6 < 64) {
+    while ((var_2 = GetWindow(var_2, var_4)) != NULL) {
         var_4 = GW_HWNDNEXT;
         if (var_2 == arg_0) {
             continue;
@@ -2661,11 +2707,11 @@ BOOL sub_3C20(HWND arg_0)
         if ((GetWindowLong(var_2, GWL_STYLE) & WS_VISIBLE) != 0) {
             GetWindowText(var_2, var_48, 16);
             if (lstrcmp(var_48, "Screen Mate") == 0) {
-                word_CA60[var_8] = var_2;
-                var_8 += 1;
-                if (var_8 > 8) {
+                if (var_8 >= SCMPOO_MAX_OTHER_INSTANCES) {
                     return FALSE;
                 }
+                word_CA60[var_8] = var_2;
+                var_8 += 1;
             }
             var_6 += 1;
         }
@@ -2682,7 +2728,7 @@ BOOL sub_3C20(HWND arg_0)
 void sub_3D12(HWND arg_0)
 {
     int var_2;
-    for (var_2 = 0; var_2 < 8; var_2 += 1) {
+    for (var_2 = 0; var_2 < SCMPOO_MAX_OTHER_INSTANCES; var_2 += 1) {
         if (word_CA60[var_2] != NULL) {
             SendMessage(word_CA60[var_2], WM_USER, (WPARAM)2, (LPARAM)arg_0);
         }
@@ -2693,7 +2739,15 @@ void sub_3D12(HWND arg_0)
 void sub_3D5F(HWND arg_0)
 {
     int var_2;
-    for (var_2 = 0; var_2 < 8; var_2 += 1) {
+    if (arg_0 == NULL || arg_0 == word_C0B0) {
+        return;
+    }
+    for (var_2 = 0; var_2 < SCMPOO_MAX_OTHER_INSTANCES; var_2 += 1) {
+        if (word_CA60[var_2] == arg_0) {
+            return;
+        }
+    }
+    for (var_2 = 0; var_2 < SCMPOO_MAX_OTHER_INSTANCES; var_2 += 1) {
         if (word_CA60[var_2] == NULL) {
             word_CA40 += 1;
             word_CA60[var_2] = arg_0;
@@ -2706,9 +2760,11 @@ void sub_3D5F(HWND arg_0)
 void sub_3DA7(HWND arg_0)
 {
     int var_2;
-    for (var_2 = 0; var_2 < 8; var_2 += 1) {
+    for (var_2 = 0; var_2 < SCMPOO_MAX_OTHER_INSTANCES; var_2 += 1) {
         if (word_CA60[var_2] == arg_0) {
-            word_CA40 -= 1;
+            if (word_CA40 > 0) {
+                word_CA40 -= 1;
+            }
             word_CA60[var_2] = NULL;
             break;
         }
@@ -2726,7 +2782,7 @@ void sub_3DF0(void)
     var_6 = 0;
     while ((var_2 = GetWindow(var_2, var_4)) != NULL && var_6 < 32) {
         var_4 = GW_HWNDNEXT;
-        if (var_2 == word_C0B0 || var_2 == word_CA60[8] || var_2 == ownerwindow || var_2 == scmpoo_speech_window) {
+        if (var_2 == word_C0B0 || var_2 == scmpoo_subwindow || var_2 == ownerwindow || var_2 == scmpoo_speech_window) {
             continue;
         }
         if ((GetWindowLong(var_2, GWL_STYLE) & WS_VISIBLE) != 0) {
@@ -3265,7 +3321,7 @@ loc_4D33:
                 break;
             }
             word_A81C = GetActiveWindow();
-            if (word_A81C == word_C0B0 || word_A81C == word_CA60[8] || word_A81C == NULL || sub_39D6(word_A81C)) {
+            if (word_A81C == word_C0B0 || word_A81C == scmpoo_subwindow || word_A81C == NULL || sub_39D6(word_A81C)) {
                 word_A8A0 = 3;
                 goto loc_4D33;
             }
@@ -3965,7 +4021,7 @@ loc_4D33:
         }
         sub_488C(word_A80E, word_A810, word_A812);
         word_C0AE = 1;
-        sub_2B01(word_CA60[8], word_C0B0);
+        sub_2B01(scmpoo_subwindow, word_C0B0);
         break;
     case 54:
         if (word_A83A++ < 2) {
@@ -4344,7 +4400,7 @@ loc_4D33:
         break;
     case 85:
         word_A81C = GetActiveWindow();
-        if (word_A81C == word_C0B0 || word_A81C == word_CA60[8] || word_A81C == NULL || sub_39D6(word_A81C)) {
+        if (word_A81C == word_C0B0 || word_A81C == scmpoo_subwindow || word_A81C == NULL || sub_39D6(word_A81C)) {
             word_A8A0 = 1;
             break;
         }
@@ -4906,7 +4962,7 @@ loc_4D33:
         word_A8A0 = 119;
         word_C0AE = 0;
         sub_2ABF(word_C0B0);
-        sub_2ABF(word_CA60[8]);
+        sub_2ABF(scmpoo_subwindow);
         break;
     case 119:
         if (word_A826 != 0) {
@@ -4966,7 +5022,7 @@ loc_4D33:
         word_A8A0 = 122;
         word_C0AE = 0;
         sub_2ABF(word_C0B0);
-        sub_2ABF(word_CA60[8]);
+        sub_2ABF(scmpoo_subwindow);
         break;
     case 122:
         if (word_A83A++ < 1) {
@@ -5039,7 +5095,7 @@ loc_4D33:
         word_A8A0 = 127;
         word_C0AE = 0;
         sub_2ABF(word_C0B0);
-        sub_2ABF(word_CA60[8]);
+        sub_2ABF(scmpoo_subwindow);
         break;
     case 127:
         if (word_A83A++ < 1) {
@@ -5088,7 +5144,7 @@ loc_4D33:
         word_A8A0 = 131;
         word_C0AE = 0;
         sub_2ABF(word_C0B0);
-        sub_2ABF(word_CA60[8]);
+        sub_2ABF(scmpoo_subwindow);
         break;
     case 131:
         if (word_A826 != 0) {
@@ -5234,7 +5290,7 @@ loc_4D33:
         word_A8A0 = 139;
         word_C0AE = 0;
         sub_2ABF(word_C0B0);
-        sub_2ABF(word_CA60[8]);
+        sub_2ABF(scmpoo_subwindow);
         break;
     case 139:
         if (word_CA72 != 0) {
@@ -5296,7 +5352,7 @@ loc_4D33:
         word_A8A0 = 143;
         word_C0AE = 0;
         sub_2ABF(word_C0B0);
-        sub_2ABF(word_CA60[8]);
+        sub_2ABF(scmpoo_subwindow);
         break;
     case 143:
         word_A80E -= word_A2AC * 16;
@@ -5367,7 +5423,7 @@ loc_4D33:
         word_A810 = SCREEN_TOP + word_A806 * 92 - 20;
         word_A8A0 = 148;
         word_C0AE = 1;
-        sub_2ABF(word_CA60[8]);
+        sub_2ABF(scmpoo_subwindow);
         sub_2ABF(word_C0B0);
     case 148:
         if (word_A83A++ < 0) {

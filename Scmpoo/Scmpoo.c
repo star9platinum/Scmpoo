@@ -39,6 +39,7 @@
 #define IDC_ACTION_UFO 1104
 #define IDC_ACTION_FALL 1105
 #define IDC_EXIT_ALL 1110
+#define IDC_START_32 1111
 
 /* GetActiveWindow is made local to current thread in 32-bit Windows. The function of global scope is now GetForegroundWindow. */
 #ifdef _WIN32
@@ -397,6 +398,8 @@ void sub_3D12(HWND);
 void sub_3D5F(HWND);
 void sub_3DA7(HWND);
 void scmpoo_close_all_instances(void);
+int scmpoo_count_running_instances(void);
+int scmpoo_launch_to_instance_limit(void);
 void sub_3DF0(void);
 int sub_3E7C(HWND *, int, int, int, int);
 int sub_408C(HWND *, int, int, int, int);
@@ -1320,6 +1323,8 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     HWND var_2;
     MSG var_14;
     WNDCLASS var_2E;
+    BOOL quiet_if_full;
+    quiet_if_full = lpCmdLine != NULL && strstr(lpCmdLine, "--fill-child") != NULL;
     scmpoo_enable_modern_dpi();
     scmpoo_update_virtual_desktop();
     if (hPrevInstance == NULL) {
@@ -1377,7 +1382,9 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 0;
     }
     if (!scmpoo_acquire_instance_slot()) {
-        MessageBoxW(NULL, L"Screen Mate 最多只能同时运行 32 只小羊。", L"Screen Mate", MB_ICONHAND | MB_OK);
+        if (!quiet_if_full) {
+            MessageBoxW(NULL, L"Screen Mate 最多只能同时运行 32 只小羊。", L"Screen Mate", MB_ICONHAND | MB_OK);
+        }
         DestroyWindow(ownerwindow);
         return 0;
     }
@@ -1518,6 +1525,7 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             AppendMenuW(menu, MF_STRING, IDC_ACTION_FALL, L"从空中落下");
             AppendMenuW(menu, MF_SEPARATOR, 0U, NULL);
             AppendMenuW(menu, MF_STRING, IDCANCEL, L"退出小羊");
+            AppendMenuW(menu, MF_STRING, IDC_START_32, L"一键开启 32 只小羊");
             AppendMenuW(menu, MF_STRING, IDC_EXIT_ALL, L"关闭所有小羊");
             GetCursorPos(&var_126);
             TrackPopupMenu(menu, TPM_RIGHTBUTTON, var_126.x, var_126.y, 0, hWnd, NULL);
@@ -1639,6 +1647,12 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             break;
         case IDC_EXIT_ALL:
             scmpoo_close_all_instances();
+            return 0;
+        case IDC_START_32:
+            var_10 = scmpoo_launch_to_instance_limit();
+            if (var_10 == 0) {
+                scmpoo_show_speech(L"已经开启 32 只小羊了。");
+            }
             return 0;
         case IDCANCEL:
             DestroyWindow(hWnd);
@@ -1942,6 +1956,11 @@ BOOL CALLBACK sub_27FF(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (LOWORD(wParam) == IDC_EXIT_ALL) {
             EndDialog(hDlg, IDC_EXIT_ALL);
             scmpoo_close_all_instances();
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDC_START_32) {
+            EndDialog(hDlg, IDC_START_32);
+            scmpoo_launch_to_instance_limit();
             return TRUE;
         }
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL || LOWORD(wParam) == IDABORT) {
@@ -2862,6 +2881,82 @@ void scmpoo_close_all_instances(void)
     }
 }
 
+/* Count both visible sheep on this desktop and the named process slots. The
+ * latter prevents two simultaneous "start 32" commands from overshooting. */
+int scmpoo_count_running_instances(void)
+{
+    HWND window;
+    UINT relation;
+    WCHAR slot_name[64];
+    HANDLE slot;
+    char class_name[32];
+    char title[32];
+    int visible_count;
+    int slot_count;
+    int index;
+    visible_count = 0;
+    window = GetDesktopWindow();
+    relation = GW_CHILD;
+    while ((window = GetWindow(window, relation)) != NULL) {
+        relation = GW_HWNDNEXT;
+        class_name[0] = '\0';
+        title[0] = '\0';
+        GetClassNameA(window, class_name, sizeof(class_name));
+        GetWindowTextA(window, title, sizeof(title));
+        if (lstrcmpA(class_name, "ScreenMatePoo") == 0 && lstrcmpA(title, "Screen Mate") == 0) {
+            visible_count += 1;
+        }
+    }
+    slot_count = 0;
+    for (index = 0; index < SCMPOO_MAX_INSTANCES; index += 1) {
+        wsprintfW(slot_name, L"Local\\Scmpoo.InstanceSlot.%d", index);
+        slot = OpenMutexW(SYNCHRONIZE, FALSE, slot_name);
+        if (slot != NULL) {
+            slot_count += 1;
+            CloseHandle(slot);
+        }
+    }
+    return max(visible_count, slot_count);
+}
+
+/* Start only the number of processes needed to reach the configured limit.
+ * Children quietly exit if another simultaneous launcher claimed the last
+ * slots first. */
+int scmpoo_launch_to_instance_limit(void)
+{
+    WCHAR executable[MAX_PATH];
+    WCHAR command_line[MAX_PATH + 32];
+    STARTUPINFOW startup_info;
+    PROCESS_INFORMATION process_info;
+    DWORD path_length;
+    int running_count;
+    int requested_count;
+    int launched_count;
+    int index;
+    running_count = scmpoo_count_running_instances();
+    if (running_count >= SCMPOO_MAX_INSTANCES) {
+        return 0;
+    }
+    path_length = GetModuleFileNameW(NULL, executable, MAX_PATH);
+    if (path_length == 0 || path_length >= MAX_PATH) {
+        return 0;
+    }
+    requested_count = SCMPOO_MAX_INSTANCES - running_count;
+    launched_count = 0;
+    for (index = 0; index < requested_count; index += 1) {
+        ZeroMemory(&startup_info, sizeof(startup_info));
+        ZeroMemory(&process_info, sizeof(process_info));
+        startup_info.cb = sizeof(startup_info);
+        wsprintfW(command_line, L"\"%ls\" --fill-child", executable);
+        if (CreateProcessW(executable, command_line, NULL, NULL, FALSE, 0, NULL, NULL, &startup_info, &process_info)) {
+            CloseHandle(process_info.hThread);
+            CloseHandle(process_info.hProcess);
+            launched_count += 1;
+        }
+    }
+    return launched_count;
+}
+
 /* Populate known visible window list. */
 void sub_3DF0(void)
 {
@@ -3357,7 +3452,7 @@ loc_4D33:
     switch (word_A8A0) {
     case 0:
         word_A7FC = 0;
-        srand((unsigned int)GetTickCount());
+        srand((unsigned int)(GetTickCount() ^ GetCurrentProcessId()));
         word_A800 = SCREEN_LEFT - 80;
         word_A802 = SCREEN_TOP - 80;
         word_A8A0 = 1;

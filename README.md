@@ -30,6 +30,8 @@ The animation engine now uses the complete Windows virtual desktop, including mo
 
 Sprite windows are clipped with the original monochrome frame masks, so unused pixels are genuinely transparent and do not intercept mouse input. This applies to Poe, Merry, the black-sheep sequence, and the UFO effect while preserving the original crisp pixel edges.
 
+The modern renderer converts each sprite sheet mask into cached frame-region data in one pass, reuses its GDI device contexts and render buffers, and moves unchanged frames without repainting them. Instance timers are phase-staggered across all 32 process slots so a batch launch does not produce synchronized redraw spikes.
+
 Double-click with right mouse button exits the instance.
 
 Double-click with left mouse button with Ctrl and Shift buttons pressed down to bring up a debug window. Click on the 30 radio buttons to choose Poe's current action, which will take effect instantly. Click the four control buttons to move Poe instantly for 20 pixels by corresponding direction. Click "OK" button to close the debug window.

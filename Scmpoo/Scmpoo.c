@@ -15,8 +15,12 @@
 #include <ShlObj.h>
 
 #define SCMPOO_TIMER_BASE_MS 108U
+#define SCMPOO_TIMER_ANIMATION_ID 1U
+#define SCMPOO_TIMER_STAGGER_ID 2U
 #define SCMPOO_MAX_INSTANCES 32
 #define SCMPOO_MAX_OTHER_INSTANCES (SCMPOO_MAX_INSTANCES - 1)
+#define SCMPOO_SPRITE_COUNT 512
+#define SCMPOO_SPRITES_PER_SHEET 16
 #define SCMPOO_SETTINGS_VERSION 2U
 #define SCMPOO_SETTINGS_SECTION L"Scmpoo"
 #define SCMPOO_SETTINGS_DIRECTORY L"Scmpoo"
@@ -65,6 +69,11 @@ typedef struct windowinfo {
     RECT rect;
     BYTE padding[66]; /* Unused. */
 } windowinfo;
+
+typedef struct cachedregion {
+    RGNDATA *data;
+    DWORD size;
+} cachedregion;
 
 int word_9CF0 = 245; /* Palette search maximum index (unused). */
 resourceinfo stru_9EE2[16] = { /* Resource list. */
@@ -345,6 +354,24 @@ DWORD scmpoo_last_reminder_tick = 0;
 DWORD scmpoo_speech_deadline = 0;
 HWND scmpoo_speech_window = NULL;
 HANDLE scmpoo_instance_slot = NULL;
+UINT scmpoo_instance_slot_index = SCMPOO_MAX_INSTANCES;
+cachedregion scmpoo_sprite_regions[SCMPOO_SPRITE_COUNT] = {{NULL, 0U}};
+HDC scmpoo_main_source_dc = NULL;
+HDC scmpoo_main_target_dc = NULL;
+HGDIOBJ scmpoo_main_source_default = NULL;
+HGDIOBJ scmpoo_main_target_default = NULL;
+HDC scmpoo_sub_source_dc = NULL;
+HDC scmpoo_sub_target_dc = NULL;
+HGDIOBJ scmpoo_sub_source_default = NULL;
+HGDIOBJ scmpoo_sub_target_default = NULL;
+int scmpoo_main_sprite_index = -1;
+int scmpoo_sub_sprite_index = -1;
+int scmpoo_main_region_sprite_index = -1;
+int scmpoo_sub_region_sprite_index = -1;
+int scmpoo_main_region_beam_height = -1;
+int scmpoo_sub_region_beam_height = -1;
+BOOL scmpoo_preserve_main_bits = FALSE;
+BOOL scmpoo_preserve_sub_bits = FALSE;
 
 #define SCREEN_LEFT (word_CA4C)
 #define SCREEN_TOP (word_CA4E)
@@ -435,6 +462,9 @@ void sub_9438(HWND);
 BOOL sub_9A49(HWND);
 HRGN scmpoo_create_sprite_region(HBITMAP, int, int, int, int, int, int);
 void scmpoo_apply_sprite_region(HWND, HBITMAP, int, int, int, int, int, int, int);
+BOOL scmpoo_apply_cached_sprite_region(HWND, int, int, BOOL);
+void scmpoo_clear_sprite_region_cache(void);
+void scmpoo_schedule_animation_timer(HWND, BOOL);
 void scmpoo_enable_modern_dpi(void);
 BOOL scmpoo_acquire_instance_slot(void);
 void scmpoo_release_instance_slot(void);
@@ -1133,6 +1163,7 @@ BOOL scmpoo_acquire_instance_slot(void)
         }
         if (GetLastError() != ERROR_ALREADY_EXISTS) {
             scmpoo_instance_slot = slot;
+            scmpoo_instance_slot_index = (UINT)index;
             return TRUE;
         }
         CloseHandle(slot);
@@ -1146,6 +1177,7 @@ void scmpoo_release_instance_slot(void)
         CloseHandle(scmpoo_instance_slot);
         scmpoo_instance_slot = NULL;
     }
+    scmpoo_instance_slot_index = SCMPOO_MAX_INSTANCES;
 }
 
 /* Refresh the complete virtual desktop, including monitors with negative coordinates. */
@@ -1276,6 +1308,33 @@ void scmpoo_update_reminder(void)
     scmpoo_show_speech(message);
 }
 
+/* Start each process at a different point within the animation period. This
+ * prevents a batch of 32 sheep from waking at the same instant forever. The
+ * companion window is shifted by another half-period relative to its owner. */
+void scmpoo_schedule_animation_timer(HWND hWnd, BOOL is_subwindow)
+{
+    UINT slot;
+    UINT phase;
+    UINT delay;
+    if (hWnd == NULL) {
+        return;
+    }
+    KillTimer(hWnd, SCMPOO_TIMER_ANIMATION_ID);
+    KillTimer(hWnd, SCMPOO_TIMER_STAGGER_ID);
+    slot = scmpoo_instance_slot_index;
+    if (slot >= SCMPOO_MAX_INSTANCES) {
+        slot = GetCurrentProcessId() % SCMPOO_MAX_INSTANCES;
+    }
+    phase = scmpoo_timer_interval * slot / SCMPOO_MAX_INSTANCES;
+    if (is_subwindow) {
+        phase = (phase + scmpoo_timer_interval / 2U) % scmpoo_timer_interval;
+    }
+    delay = max((UINT)USER_TIMER_MINIMUM, phase);
+    if (SetTimer(hWnd, SCMPOO_TIMER_STAGGER_ID, delay, NULL) == 0U) {
+        SetTimer(hWnd, SCMPOO_TIMER_ANIMATION_ID, scmpoo_timer_interval, NULL);
+    }
+}
+
 /* Apply options that affect live window state and animation cadence. */
 void scmpoo_apply_runtime_settings(HWND hWnd)
 {
@@ -1291,14 +1350,12 @@ void scmpoo_apply_runtime_settings(HWND hWnd)
         scmpoo_timer_interval = 16U;
     }
     if (hWnd != NULL) {
-        KillTimer(hWnd, 1U);
-        SetTimer(hWnd, 1U, scmpoo_timer_interval, NULL);
+        scmpoo_schedule_animation_timer(hWnd, FALSE);
         insert_after = word_CA3E != 0 ? HWND_TOPMOST : HWND_NOTOPMOST;
         SetWindowPos(hWnd, insert_after, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
     }
     if (scmpoo_subwindow != NULL) {
-        KillTimer(scmpoo_subwindow, 1U);
-        SetTimer(scmpoo_subwindow, 1U, scmpoo_timer_interval, NULL);
+        scmpoo_schedule_animation_timer(scmpoo_subwindow, TRUE);
         insert_after = word_CA3E != 0 ? HWND_TOPMOST : HWND_NOTOPMOST;
         SetWindowPos(scmpoo_subwindow, insert_after, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
     }
@@ -1540,12 +1597,20 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (word_A7A2 != 0) {
             windowpos = (LPWINDOWPOS)lParam;
         }
-        windowpos->flags |= SWP_NOCOPYBITS;
+        if (!scmpoo_preserve_main_bits) {
+            windowpos->flags |= SWP_NOCOPYBITS;
+        }
         word_A7AC = 1;
         return 0;
     case WM_WINDOWPOSCHANGED:
         return 0;
     case WM_TIMER:
+        if (wParam == SCMPOO_TIMER_STAGGER_ID) {
+            KillTimer(hWnd, SCMPOO_TIMER_STAGGER_ID);
+            SetTimer(hWnd, SCMPOO_TIMER_ANIMATION_ID, scmpoo_timer_interval, NULL);
+        } else if (wParam != SCMPOO_TIMER_ANIMATION_ID) {
+            break;
+        }
         if (word_C0BA != 0) {
             word_C0BA -= 1;
             return 0;
@@ -1605,19 +1670,12 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             ValidateRect(hWnd, NULL);
             return 0;
         }
-        sub_3237(hWnd);
-        ValidateRect(hWnd, NULL);
-        return 0;
-        GetWindowRect(hWnd, &var_1A);
-        if (stru_A7A4.top == var_1A.top && stru_A7A4.bottom == var_1A.bottom && stru_A7A4.left == var_1A.left && stru_A7A4.right == var_1A.right) {
-            sub_3237(hWnd);
-            ValidateRect(hWnd, NULL);
-            return 0;
+        if (word_A7BC != NULL && word_A7BA != NULL) {
+            word_A7D2 = 1;
+            sub_3717(hWnd);
         }
-        GetWindowRect(hWnd, &stru_A7A4);
         ValidateRect(hWnd, NULL);
         return 0;
-        break;
     case WM_QUIT:
         return 0;
     case WM_COMMAND:
@@ -1748,7 +1806,8 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (scmpoo_subwindow != NULL) {
             sub_2A96();
         }
-        KillTimer(hWnd, 1U);
+        KillTimer(hWnd, SCMPOO_TIMER_ANIMATION_ID);
+        KillTimer(hWnd, SCMPOO_TIMER_STAGGER_ID);
         sub_428E();
         sub_3119((WORD)0);
         sub_44ED();
@@ -1772,16 +1831,24 @@ LRESULT CALLBACK sub_2699(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             DestroyWindow(hWnd);
             return 1;
         }
-        SetTimer(hWnd, 1U, scmpoo_timer_interval, NULL);
+        scmpoo_schedule_animation_timer(hWnd, TRUE);
         break;
     case WM_WINDOWPOSCHANGING:
         var_4 = (LPWINDOWPOS)lParam;
-        var_4->flags |= SWP_NOCOPYBITS;
+        if (!scmpoo_preserve_sub_bits) {
+            var_4->flags |= SWP_NOCOPYBITS;
+        }
         word_A7B4 = 1;
         return 0;
     case WM_WINDOWPOSCHANGED:
         return 0;
     case WM_TIMER:
+        if (wParam == SCMPOO_TIMER_STAGGER_ID) {
+            KillTimer(hWnd, SCMPOO_TIMER_STAGGER_ID);
+            SetTimer(hWnd, SCMPOO_TIMER_ANIMATION_ID, scmpoo_timer_interval, NULL);
+        } else if (wParam != SCMPOO_TIMER_ANIMATION_ID) {
+            break;
+        }
         word_A7B4 = 0;
         sub_9438(hWnd);
         if (!sub_9A49(hWnd)) {
@@ -1804,14 +1871,18 @@ LRESULT CALLBACK sub_2699(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             ValidateRect(hWnd, NULL);
             return 0;
         }
-        sub_93DF(hWnd);
+        if (word_A856 != NULL && word_A854 != NULL) {
+            word_A870 = 1;
+            sub_9A49(hWnd);
+        }
         ValidateRect(hWnd, NULL);
         return 0;
     case WM_ERASEBKGND:
         return 0;
     case WM_DESTROY:
         sub_930F(0);
-        KillTimer(hWnd, 1U);
+        KillTimer(hWnd, SCMPOO_TIMER_ANIMATION_ID);
+        KillTimer(hWnd, SCMPOO_TIMER_STAGGER_ID);
         break;
     default:
         break;
@@ -2333,22 +2404,35 @@ BOOL sub_306A(HWND arg_0)
 {
     HDC var_2;
     var_2 = GetDC(arg_0);
-    word_A7B6[0] = CreateCompatibleBitmap(var_2, 100, 100);
-    if (word_A7B6[0] == NULL) {
-        goto loc_3104;
-    }
-    word_A7B6[1] = CreateCompatibleBitmap(var_2, 100, 100);
-    if (word_A7B6[1] == NULL) {
-        goto loc_3104;
-    }
     word_A7BA = CreateCompatibleBitmap(var_2, 100, 100);
     if (word_A7BA == NULL) {
         goto loc_3104;
     }
+    scmpoo_main_source_dc = CreateCompatibleDC(var_2);
+    scmpoo_main_target_dc = CreateCompatibleDC(var_2);
+    if (scmpoo_main_source_dc == NULL || scmpoo_main_target_dc == NULL) {
+        goto loc_3104;
+    }
+    scmpoo_main_source_default = GetCurrentObject(scmpoo_main_source_dc, OBJ_BITMAP);
+    scmpoo_main_target_default = GetCurrentObject(scmpoo_main_target_dc, OBJ_BITMAP);
+    SelectPalette(scmpoo_main_source_dc, word_CA4A, FALSE);
+    SelectPalette(scmpoo_main_target_dc, word_CA4A, FALSE);
     scmpoo_update_virtual_desktop();
     ReleaseDC(arg_0, var_2);
     return TRUE;
 loc_3104:
+    if (scmpoo_main_source_dc != NULL) {
+        DeleteDC(scmpoo_main_source_dc);
+        scmpoo_main_source_dc = NULL;
+    }
+    if (scmpoo_main_target_dc != NULL) {
+        DeleteDC(scmpoo_main_target_dc);
+        scmpoo_main_target_dc = NULL;
+    }
+    if (word_A7BA != NULL) {
+        DeleteObject(word_A7BA);
+        word_A7BA = NULL;
+    }
     ReleaseDC(arg_0, var_2);
     return FALSE;
 }
@@ -2356,9 +2440,22 @@ loc_3104:
 /* Release bitmaps. */
 void sub_3119()
 {
+    if (scmpoo_main_source_dc != NULL) {
+        SelectObject(scmpoo_main_source_dc, scmpoo_main_source_default);
+        DeleteDC(scmpoo_main_source_dc);
+        scmpoo_main_source_dc = NULL;
+    }
+    if (scmpoo_main_target_dc != NULL) {
+        SelectObject(scmpoo_main_target_dc, scmpoo_main_target_default);
+        DeleteDC(scmpoo_main_target_dc);
+        scmpoo_main_target_dc = NULL;
+    }
     DeleteObject(word_A7B6[0]);
     DeleteObject(word_A7B6[1]);
     DeleteObject(word_A7BA);
+    word_A7B6[0] = NULL;
+    word_A7B6[1] = NULL;
+    word_A7BA = NULL;
     if (word_C0B4 != NULL) {
         DeleteObject(word_C0B4);
         word_C0B4 = NULL;
@@ -2380,6 +2477,7 @@ void sub_3119()
 /* Update window position and sprite to be actually used. */
 void sub_31A8(int arg_0, int arg_2, int arg_4)
 {
+    scmpoo_main_sprite_index = arg_4;
     word_A7DA = arg_0;
     word_A7DC = arg_2;
     word_A7BC = stru_A8A2[arg_4].bitmaps[0];
@@ -2390,80 +2488,228 @@ void sub_31A8(int arg_0, int arg_2, int arg_4)
     word_A7E0 = stru_A8A2[arg_4].height;
 }
 
-/* Build a pixel-exact window region from an original monochrome sprite mask.
- * The reconstructed renderer uses white mask pixels for the transparent colour
- * and black pixels for the visible part of each frame. */
-HRGN scmpoo_create_sprite_region(HBITMAP mask, int source_x, int source_y, int width, int height, int offset_x, int offset_y)
+static RGNDATA *scmpoo_create_region_data(const BYTE *pixels, int stride, int source_x, int source_y, int width, int height, DWORD *data_size)
 {
-    HRGN result;
-    HRGN run_region;
-    HDC mask_dc;
-    HGDIOBJ old_bitmap;
-    COLORREF pixel;
+    RGNDATA *data;
+    RECT *rectangles;
+    DWORD allocation_size;
+    DWORD rectangle_count;
+    DWORD maximum_rectangles;
+    const BYTE *pixel;
     int x;
     int y;
     int run_start;
-    BOOL failed;
-
-    result = CreateRectRgn(0, 0, 0, 0);
-    if (result == NULL) {
+    if (data_size == NULL || width <= 0 || height <= 0) {
         return NULL;
     }
-    if (width <= 0 || height <= 0) {
-        return result;
+    maximum_rectangles = (DWORD)(((width + 1) / 2) * height);
+    allocation_size = sizeof(RGNDATAHEADER) + maximum_rectangles * sizeof(RECT);
+    data = (RGNDATA *)LocalAlloc(LPTR, allocation_size);
+    if (data == NULL) {
+        return NULL;
     }
-    if (mask == NULL) {
-        SetRectRgn(result, offset_x, offset_y, offset_x + width, offset_y + height);
-        return result;
-    }
-
-    mask_dc = CreateCompatibleDC(NULL);
-    if (mask_dc == NULL) {
-        SetRectRgn(result, offset_x, offset_y, offset_x + width, offset_y + height);
-        return result;
-    }
-    old_bitmap = SelectObject(mask_dc, mask);
-    if (old_bitmap == NULL || old_bitmap == HGDI_ERROR) {
-        DeleteDC(mask_dc);
-        SetRectRgn(result, offset_x, offset_y, offset_x + width, offset_y + height);
-        return result;
-    }
-
-    failed = FALSE;
-    for (y = 0; y < height && !failed; y += 1) {
+    rectangles = (RECT *)data->Buffer;
+    rectangle_count = 0U;
+    data->rdh.dwSize = sizeof(RGNDATAHEADER);
+    data->rdh.iType = RDH_RECTANGLES;
+    data->rdh.rcBound.left = width;
+    data->rdh.rcBound.top = height;
+    data->rdh.rcBound.right = 0;
+    data->rdh.rcBound.bottom = 0;
+    for (y = 0; y < height; y += 1) {
         run_start = -1;
         for (x = 0; x <= width; x += 1) {
-            if (x < width) {
-                pixel = GetPixel(mask_dc, source_x + x, source_y + y);
-                if (pixel == CLR_INVALID) {
-                    failed = TRUE;
-                    break;
-                }
-            } else {
-                pixel = RGB(255, 255, 255);
-            }
-            if (pixel != RGB(255, 255, 255)) {
+            pixel = x < width && pixels != NULL ? pixels + (source_y + y) * stride + (source_x + x) * 4 : NULL;
+            if (x < width && (pixel == NULL || pixel[0] != 255U || pixel[1] != 255U || pixel[2] != 255U)) {
                 if (run_start < 0) {
                     run_start = x;
                 }
             } else if (run_start >= 0) {
-                run_region = CreateRectRgn(offset_x + run_start, offset_y + y, offset_x + x, offset_y + y + 1);
-                if (run_region == NULL) {
-                    failed = TRUE;
-                    break;
-                }
-                CombineRgn(result, result, run_region, RGN_OR);
-                DeleteObject(run_region);
+                rectangles[rectangle_count].left = run_start;
+                rectangles[rectangle_count].top = y;
+                rectangles[rectangle_count].right = x;
+                rectangles[rectangle_count].bottom = y + 1;
+                rectangle_count += 1U;
+                data->rdh.rcBound.left = min(data->rdh.rcBound.left, run_start);
+                data->rdh.rcBound.top = min(data->rdh.rcBound.top, y);
+                data->rdh.rcBound.right = max(data->rdh.rcBound.right, x);
+                data->rdh.rcBound.bottom = max(data->rdh.rcBound.bottom, y + 1);
                 run_start = -1;
             }
         }
     }
-
-    SelectObject(mask_dc, old_bitmap);
-    DeleteDC(mask_dc);
-    if (failed) {
-        SetRectRgn(result, offset_x, offset_y, offset_x + width, offset_y + height);
+    if (rectangle_count == 0U) {
+        SetRectEmpty(&data->rdh.rcBound);
     }
+    data->rdh.nCount = rectangle_count;
+    data->rdh.nRgnSize = rectangle_count * sizeof(RECT);
+    *data_size = sizeof(RGNDATAHEADER) + data->rdh.nRgnSize;
+    return data;
+}
+
+static BOOL scmpoo_read_mask_bitmap(HBITMAP mask, BYTE **pixels, int *bitmap_width, int *bitmap_height, int *stride)
+{
+    BITMAP bitmap;
+    BITMAPINFO dib_info;
+    HDC screen;
+    BYTE *result;
+    if (mask == NULL || pixels == NULL || bitmap_width == NULL || bitmap_height == NULL || stride == NULL) {
+        return FALSE;
+    }
+    if (GetObject(mask, sizeof(bitmap), &bitmap) == 0 || bitmap.bmWidth <= 0 || bitmap.bmHeight <= 0) {
+        return FALSE;
+    }
+    *stride = bitmap.bmWidth * 4;
+    result = (BYTE *)LocalAlloc(LMEM_FIXED, (SIZE_T)(*stride) * bitmap.bmHeight);
+    if (result == NULL) {
+        return FALSE;
+    }
+    ZeroMemory(&dib_info, sizeof(dib_info));
+    dib_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    dib_info.bmiHeader.biWidth = bitmap.bmWidth;
+    dib_info.bmiHeader.biHeight = -bitmap.bmHeight;
+    dib_info.bmiHeader.biPlanes = 1;
+    dib_info.bmiHeader.biBitCount = 32;
+    dib_info.bmiHeader.biCompression = BI_RGB;
+    screen = GetDC(NULL);
+    if (screen == NULL || GetDIBits(screen, mask, 0U, (UINT)bitmap.bmHeight, result, &dib_info, DIB_RGB_COLORS) == 0) {
+        if (screen != NULL) {
+            ReleaseDC(NULL, screen);
+        }
+        LocalFree(result);
+        return FALSE;
+    }
+    ReleaseDC(NULL, screen);
+    *pixels = result;
+    *bitmap_width = bitmap.bmWidth;
+    *bitmap_height = bitmap.bmHeight;
+    return TRUE;
+}
+
+static BOOL scmpoo_build_sprite_region_group(int sprite_index)
+{
+    BYTE *pixels;
+    HBITMAP mask;
+    int bitmap_width;
+    int bitmap_height;
+    int stride;
+    int base;
+    int index;
+    int frame;
+    base = sprite_index / SCMPOO_SPRITES_PER_SHEET * SCMPOO_SPRITES_PER_SHEET;
+    if (base < 0 || base >= SCMPOO_SPRITE_COUNT) {
+        return FALSE;
+    }
+    if (scmpoo_sprite_regions[base].data != NULL) {
+        return TRUE;
+    }
+    mask = stru_A8A2[base].bitmaps[1];
+    pixels = NULL;
+    bitmap_width = 0;
+    bitmap_height = 0;
+    stride = 0;
+    if (mask != NULL && !scmpoo_read_mask_bitmap(mask, &pixels, &bitmap_width, &bitmap_height, &stride)) {
+        return FALSE;
+    }
+    for (frame = 0; frame < SCMPOO_SPRITES_PER_SHEET; frame += 1) {
+        index = base + frame;
+        if (stru_A8A2[index].width <= 0 || stru_A8A2[index].height <= 0) {
+            continue;
+        }
+        if (pixels != NULL && (stru_A8A2[index].x < 0 || stru_A8A2[index].y < 0 ||
+            stru_A8A2[index].x + stru_A8A2[index].width > bitmap_width ||
+            stru_A8A2[index].y + stru_A8A2[index].height > bitmap_height)) {
+            continue;
+        }
+        scmpoo_sprite_regions[index].data = scmpoo_create_region_data(
+            pixels,
+            stride,
+            stru_A8A2[index].x,
+            stru_A8A2[index].y,
+            stru_A8A2[index].width,
+            stru_A8A2[index].height,
+            &scmpoo_sprite_regions[index].size);
+    }
+    if (pixels != NULL) {
+        LocalFree(pixels);
+    }
+    return scmpoo_sprite_regions[sprite_index].data != NULL;
+}
+
+static BOOL scmpoo_region_data_equal(const cachedregion *left, const cachedregion *right)
+{
+    if (left == NULL || right == NULL || left->data == NULL || right->data == NULL) {
+        return FALSE;
+    }
+    if (left->size != right->size) {
+        return FALSE;
+    }
+    return memcmp(left->data, right->data, left->size) == 0;
+}
+
+static HRGN scmpoo_create_region_from_data(const cachedregion *cached, int offset_x, int offset_y)
+{
+    HRGN result;
+    if (cached == NULL || cached->data == NULL) {
+        return NULL;
+    }
+    if (cached->data->rdh.nCount == 0U) {
+        result = CreateRectRgn(0, 0, 0, 0);
+    } else {
+        result = ExtCreateRegion(NULL, cached->size, cached->data);
+    }
+    if (result != NULL && (offset_x != 0 || offset_y != 0)) {
+        OffsetRgn(result, offset_x, offset_y);
+    }
+    return result;
+}
+
+void scmpoo_clear_sprite_region_cache(void)
+{
+    int index;
+    for (index = 0; index < SCMPOO_SPRITE_COUNT; index += 1) {
+        if (scmpoo_sprite_regions[index].data != NULL) {
+            LocalFree(scmpoo_sprite_regions[index].data);
+            scmpoo_sprite_regions[index].data = NULL;
+            scmpoo_sprite_regions[index].size = 0U;
+        }
+    }
+}
+
+/* Build a pixel-exact window region without the old per-pixel GetPixel calls.
+ * This path remains for the dynamically changing fade mask; ordinary sprite
+ * frames use the persistent cached region data below. */
+HRGN scmpoo_create_sprite_region(HBITMAP mask, int source_x, int source_y, int width, int height, int offset_x, int offset_y)
+{
+    BYTE *pixels;
+    RGNDATA *data;
+    cachedregion cached;
+    HRGN result;
+    int bitmap_width;
+    int bitmap_height;
+    int stride;
+    DWORD data_size;
+    if (mask == NULL) {
+        return CreateRectRgn(offset_x, offset_y, offset_x + width, offset_y + height);
+    }
+    pixels = NULL;
+    if (!scmpoo_read_mask_bitmap(mask, &pixels, &bitmap_width, &bitmap_height, &stride) ||
+        source_x < 0 || source_y < 0 || source_x + width > bitmap_width || source_y + height > bitmap_height) {
+        if (pixels != NULL) {
+            LocalFree(pixels);
+        }
+        return CreateRectRgn(offset_x, offset_y, offset_x + width, offset_y + height);
+    }
+    data_size = 0U;
+    data = scmpoo_create_region_data(pixels, stride, source_x, source_y, width, height, &data_size);
+    LocalFree(pixels);
+    if (data == NULL) {
+        return CreateRectRgn(offset_x, offset_y, offset_x + width, offset_y + height);
+    }
+    cached.data = data;
+    cached.size = data_size;
+    result = scmpoo_create_region_from_data(&cached, offset_x, offset_y);
+    LocalFree(data);
     return result;
 }
 
@@ -2491,6 +2737,52 @@ void scmpoo_apply_sprite_region(HWND window, HBITMAP mask, int source_x, int sou
     }
 }
 
+/* Apply a cached frame outline only if its shape or beam height changed. A
+ * fresh HRGN is still made because SetWindowRgn takes ownership of its input. */
+BOOL scmpoo_apply_cached_sprite_region(HWND window, int sprite_index, int beam_height, BOOL is_subwindow)
+{
+    cachedregion *current;
+    cachedregion *previous;
+    HRGN window_region;
+    HRGN beam_region;
+    int *previous_index;
+    int *previous_beam_height;
+    BOOL shape_changed;
+    if (sprite_index < 0 || sprite_index >= SCMPOO_SPRITE_COUNT || window == NULL) {
+        return FALSE;
+    }
+    if (!scmpoo_build_sprite_region_group(sprite_index)) {
+        return FALSE;
+    }
+    previous_index = is_subwindow ? &scmpoo_sub_region_sprite_index : &scmpoo_main_region_sprite_index;
+    previous_beam_height = is_subwindow ? &scmpoo_sub_region_beam_height : &scmpoo_main_region_beam_height;
+    current = &scmpoo_sprite_regions[sprite_index];
+    previous = *previous_index >= 0 && *previous_index < SCMPOO_SPRITE_COUNT ? &scmpoo_sprite_regions[*previous_index] : NULL;
+    shape_changed = !scmpoo_region_data_equal(current, previous);
+    if (!shape_changed && *previous_beam_height == beam_height) {
+        *previous_index = sprite_index;
+        return TRUE;
+    }
+    window_region = scmpoo_create_region_from_data(current, 0, 0);
+    if (window_region == NULL) {
+        return FALSE;
+    }
+    if (beam_height > 0) {
+        beam_region = CreateRectRgn(0, 40, 40, 40 + beam_height);
+        if (beam_region != NULL) {
+            CombineRgn(window_region, window_region, beam_region, RGN_OR);
+            DeleteObject(beam_region);
+        }
+    }
+    if (!SetWindowRgn(window, window_region, FALSE)) {
+        DeleteObject(window_region);
+        return FALSE;
+    }
+    *previous_index = sprite_index;
+    *previous_beam_height = beam_height;
+    return TRUE;
+}
+
 /* Clear window. */
 void sub_3237(HWND arg_0)
 {
@@ -2502,95 +2794,57 @@ void sub_3237(HWND arg_0)
     word_A7D4 = 1;
     word_C0BA = 1;
     word_A7D8 = NULL;
+    scmpoo_main_region_sprite_index = -1;
+    scmpoo_main_region_beam_height = -1;
 }
 
-/* Render sprite with double buffering. */
+/* Render the current frame into a reusable buffer. When only the position has
+ * changed, keep the existing client pixels and move the shaped window without
+ * repainting it. */
 void sub_3284(HWND arg_0)
 {
-    HDC var_2;
-    HDC var_4;
-    HDC var_6;
-    int var_C;
-    int var_E;
-    int var_10;
-    int var_12;
-    int var_14;
-    int var_16;
-    int var_18;
-    int var_1A;
-    int var_1C;
-    int var_1E;
+    BOOL position_changed;
+    BOOL sprite_changed;
+    BOOL beam_changed;
     if (word_A7D2 != 0) {
         return;
     }
-    if (word_A7F2 == word_A7DA && word_A7F4 == word_A7DC && word_A7D8 == word_A7BC && word_A7C8 == word_A7C0 && word_CA72 == 0) {
+    position_changed = word_A7F2 != word_A7DA || word_A7F4 != word_A7DC;
+    sprite_changed = word_A7D8 != word_A7BC || word_A7C8 != word_A7C0 || word_A7CA != word_A7C2 || scmpoo_main_region_sprite_index < 0;
+    beam_changed = scmpoo_main_region_beam_height != word_CA72;
+    if (!position_changed && !sprite_changed && !beam_changed && word_CA72 == 0) {
         return;
     }
-    word_A7D0 ^= 1;
-    var_2 = GetDC(NULL);
-    SelectPalette(var_2, word_CA4A, FALSE);
-    var_4 = CreateCompatibleDC(var_2);
-    var_6 = CreateCompatibleDC(var_2);
-    SelectPalette(var_6, word_CA4A, FALSE);
-    SelectPalette(var_4, word_CA4A, FALSE);
-    var_16 = max(word_A7DA, word_A7F2);
-    var_14 = max(word_A7DC, word_A7F4);
-    var_12 = min(word_A7DE + word_A7DA, word_A7F6 + word_A7F2) - var_16;
-    var_10 = min(word_A7DC + word_A7E0, word_A7F4 + word_A7F8) - var_14;
-    if (var_12 <= 0 || var_10 <= 0) {
-        word_A7FA = 1;
-        if (word_A7D4 != 0) {
-            word_A7D4 = 0;
-        }
-        word_A7E2 = word_A7DA;
-        word_A7E4 = word_A7DC;
-        word_A7E6 = word_A7DE;
-        word_A7E8 = word_A7E0;
-        SelectObject(var_4, word_A7B6[word_A7D0]);
-        BitBlt(var_4, 0, 0, word_A7E6, word_A7E8, var_2, word_A7E2, word_A7E4, SRCCOPY);
-    } else {
-        word_A7FA = 0;
-        word_A7E2 = min(word_A7DA, word_A7F2);
-        word_A7E4 = min(word_A7DC, word_A7F4);
-        word_A7E6 = max(word_A7DE + word_A7DA, word_A7F6 + word_A7F2) - word_A7E2;
-        word_A7E8 = max(word_A7DC + word_A7E0, word_A7F4 + word_A7F8) - word_A7E4;
-        SelectObject(var_4, word_A7B6[word_A7D0]);
-        BitBlt(var_4, 0, 0, word_A7E6, word_A7E8, var_2, word_A7E2, word_A7E4, SRCCOPY);
-        var_1E = max(word_A7E2, word_A7EA);
-        var_1C = max(word_A7E4, word_A7EC);
-        var_1A = min(word_A7E6 + word_A7E2, word_A7EE + word_A7EA) - var_1E;
-        var_18 = min(word_A7E4 + word_A7E8, word_A7EC + word_A7F0) - var_1C;
-        var_16 = max(0, var_1E - word_A7E2);
-        var_14 = max(0, var_1C - word_A7E4);
-        var_E = max(0, var_1E - word_A7EA);
-        var_C = max(0, var_1C - word_A7EC);
-        if (var_1A > 0 && var_18 > 0) {
-            SelectObject(var_6, word_A7B6[LOBYTE(word_A7D0) - 0xFF & 1]);
-            BitBlt(var_4, var_16, var_14, var_1A, var_18, var_6, var_E, var_C, SRCCOPY);
-        }
-    }
-    if (word_A7BC != NULL) {
-        SelectObject(var_6, word_A7BA);
-        BitBlt(var_6, 0, 0, word_A7E6, word_A7E8, var_4, 0, 0, SRCCOPY);
-        var_16 = max(0, word_A7DA - word_A7E2);
-        var_14 = max(0, word_A7DC - word_A7E4);
-        if (word_A7BE != NULL) {
-            SelectObject(var_4, word_A7BE);
-            BitBlt(var_6, var_16, var_14, word_A7DE, word_A7E0, var_4, word_A7C0, word_A7C2, SRCAND);
-            SelectObject(var_4, word_A7BC);
-            BitBlt(var_6, var_16, var_14, word_A7DE, word_A7E0, var_4, word_A7C0, word_A7C2, SRCPAINT);
-        } else {
-            SelectObject(var_4, word_A7BC);
-            BitBlt(var_6, var_16, var_14, word_A7DE, word_A7E0, var_4, word_A7C0, word_A7C2, SRCCOPY);
-        }
+    word_A7E2 = word_A7DA;
+    word_A7E4 = word_A7DC;
+    word_A7E6 = word_A7DE;
+    word_A7E8 = word_A7E0;
+    if (position_changed && !sprite_changed && !beam_changed && word_CA72 == 0) {
+        scmpoo_preserve_main_bits = TRUE;
+        SetWindowPos(arg_0, NULL, word_A7E2, word_A7E4, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW);
+        scmpoo_preserve_main_bits = FALSE;
+        word_A7AC = 0;
+    } else if (word_A7BC != NULL) {
+        SelectObject(scmpoo_main_source_dc, word_A7BC);
+        SelectObject(scmpoo_main_target_dc, word_A7BA);
+        BitBlt(scmpoo_main_target_dc, 0, 0, word_A7E6, word_A7E8,
+            scmpoo_main_source_dc, word_A7C0, word_A7C2, SRCCOPY);
+        SelectObject(scmpoo_main_source_dc, scmpoo_main_source_default);
+        SelectObject(scmpoo_main_target_dc, scmpoo_main_target_default);
         word_A7D2 = 1;
         word_CA5E = 1;
-        MoveWindow(arg_0, word_A7E2, word_A7E4, word_A7E6, word_A7E8 + word_CA72, FALSE);
-        scmpoo_apply_sprite_region(arg_0, word_A7BE, word_A7C0, word_A7C2, word_A7DE, word_A7E0, var_16, var_14, word_CA72);
+        SetWindowPos(arg_0, NULL, word_A7E2, word_A7E4, word_A7E6, word_A7E8 + word_CA72,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW);
+        if (!scmpoo_apply_cached_sprite_region(arg_0, scmpoo_main_sprite_index, word_CA72, FALSE)) {
+            scmpoo_apply_sprite_region(arg_0, word_A7BE, word_A7C0, word_A7C2,
+                word_A7DE, word_A7E0, 0, 0, word_CA72);
+            scmpoo_main_region_sprite_index = scmpoo_main_sprite_index;
+            scmpoo_main_region_beam_height = word_CA72;
+        }
         word_CA5E = 0;
+        word_A7AC = 0;
     }
-    DeleteDC(var_4);
-    DeleteDC(var_6);
     word_A7EA = word_A7E2;
     word_A7EC = word_A7E4;
     word_A7EE = word_A7E6;
@@ -2602,16 +2856,13 @@ void sub_3284(HWND arg_0)
     word_A7D8 = word_A7BC;
     word_A7C8 = word_A7C0;
     word_A7CA = word_A7C2;
-    ReleaseDC(NULL, var_2);
 }
 
 /* Render UFO beam (if any) and present render targets onto window. */
 void sub_3717(HWND arg_0)
 {
     HDC var_2;
-    HDC var_4;
     RECT var_C;
-    HDC var_E;
 #ifdef WIN32
     HDC screen;
 #endif
@@ -2622,10 +2873,8 @@ void sub_3717(HWND arg_0)
     var_2 = GetDC(arg_0);
     SelectPalette(var_2, word_CA4A, FALSE);
     RealizePalette(var_2);
-    var_4 = CreateCompatibleDC(var_2);
-    SelectPalette(var_4, word_CA4A, FALSE);
-    SelectObject(var_4, word_A7BA);
-    BitBlt(var_2, 0, 0, word_A7E6, word_A7E8, var_4, 0, 0, SRCCOPY);
+    SelectObject(scmpoo_main_target_dc, word_A7BA);
+    BitBlt(var_2, 0, 0, word_A7E6, word_A7E8, scmpoo_main_target_dc, 0, 0, SRCCOPY);
     if (word_CA72 != 0) {
         if (word_C0B8 == NULL) {
             word_C0B8 = CreateCompatibleBitmap(var_2, 40, SCREEN_HEIGHT * 4 / 5);
@@ -2645,50 +2894,33 @@ void sub_3717(HWND arg_0)
         if (word_C0B4 == NULL) {
             word_C0B4 = CreateSolidBrush(RGB(128, 128, 0));
         }
-        var_E = CreateCompatibleDC(var_2);
-        SelectObject(var_E, word_C0B2);
+        SelectObject(scmpoo_main_source_dc, word_C0B2);
 #ifdef _WIN32
         /* Screen contents with height of only 40 pixels can be captured from window device context on Windows 10. Capture directly from screen instead. */
         screen = GetDC(NULL);
-        BitBlt(var_E, 0, 0, 40, word_CA72, screen, word_A7E2, word_A7E4 + 40, SRCCOPY);
+        BitBlt(scmpoo_main_source_dc, 0, 0, 40, word_CA72, screen, word_A7E2, word_A7E4 + 40, SRCCOPY);
         ReleaseDC(NULL, screen);
 #else
-        BitBlt(var_E, 0, 0, 40, word_CA72, var_2, 0, 40, SRCCOPY);
+        BitBlt(scmpoo_main_source_dc, 0, 0, 40, word_CA72, var_2, 0, 40, SRCCOPY);
 #endif
         var_C.left = 0;
         var_C.top = 0;
         var_C.right = 40;
         var_C.bottom = word_CA72;
-        SelectObject(var_4, word_C0B8);
-        FillRect(var_4, &var_C, word_CA44);
-        BitBlt(var_E, 0, 0, 40, word_CA72, var_4, 0, 0, SRCAND);
-        FillRect(var_4, &var_C, word_C0B4);
-        BitBlt(var_E, 0, 0, 40, word_CA72, var_4, 0, 0, SRCPAINT);
-        BitBlt(var_2, 0, 40, 40, word_CA72, var_E, 0, 0, SRCCOPY);
-        DeleteDC(var_E);
-        DeleteDC(var_4);
-    } else {
-        if (word_C0B4 != NULL) {
-            DeleteObject(word_C0B4);
-            word_C0B4 = NULL;
-        }
-        if (word_CA44 != NULL) {
-            DeleteObject(word_CA44);
-            word_CA44 = NULL;
-        }
-        if (word_C0B2 != NULL) {
-            DeleteObject(word_C0B2);
-            word_C0B2 = NULL;
-        }
-        if (word_C0B8 != NULL) {
-            DeleteObject(word_C0B8);
-            word_C0B8 = NULL;
-        }
-        DeleteDC(var_4);
+        SelectObject(scmpoo_main_target_dc, word_C0B8);
+        FillRect(scmpoo_main_target_dc, &var_C, word_CA44);
+        BitBlt(scmpoo_main_source_dc, 0, 0, 40, word_CA72, scmpoo_main_target_dc, 0, 0, SRCAND);
+        FillRect(scmpoo_main_target_dc, &var_C, word_C0B4);
+        BitBlt(scmpoo_main_source_dc, 0, 0, 40, word_CA72, scmpoo_main_target_dc, 0, 0, SRCPAINT);
+        BitBlt(var_2, 0, 40, 40, word_CA72, scmpoo_main_source_dc, 0, 0, SRCCOPY);
     }
+    SelectObject(scmpoo_main_source_dc, scmpoo_main_source_default);
+    SelectObject(scmpoo_main_target_dc, scmpoo_main_target_default);
     ReleaseDC(arg_0, var_2);
     return;
 loc_398B:
+    SelectObject(scmpoo_main_source_dc, scmpoo_main_source_default);
+    SelectObject(scmpoo_main_target_dc, scmpoo_main_target_default);
     ReleaseDC(arg_0, var_2);
 }
 
@@ -3150,6 +3382,7 @@ BOOL sub_42F3(HDC arg_0)
 void sub_44ED(void)
 {
     int var_2;
+    scmpoo_clear_sprite_region_cache();
     for (var_2 = 0; var_2 < 16; var_2 += 1) {
         if (stru_9EE2[var_2].resource == 0) {
             break;
@@ -5836,14 +6069,6 @@ BOOL sub_9200(HWND arg_0)
 {
     HDC var_2;
     var_2 = GetDC(arg_0);
-    word_A850[0] = CreateCompatibleBitmap(var_2, 100, 100);
-    if (word_A850[0] == NULL) {
-        goto loc_92FA;
-    }
-    word_A850[1] = CreateCompatibleBitmap(var_2, 100, 100);
-    if (word_A850[1] == NULL) {
-        goto loc_92FA;
-    }
     word_A854 = CreateCompatibleBitmap(var_2, 100, 100);
     if (word_A854 == NULL) {
         goto loc_92FA;
@@ -5856,6 +6081,15 @@ BOOL sub_9200(HWND arg_0)
     if (word_A85C == NULL) {
         goto loc_92FA;
     }
+    scmpoo_sub_source_dc = CreateCompatibleDC(var_2);
+    scmpoo_sub_target_dc = CreateCompatibleDC(var_2);
+    if (scmpoo_sub_source_dc == NULL || scmpoo_sub_target_dc == NULL) {
+        goto loc_92FA;
+    }
+    scmpoo_sub_source_default = GetCurrentObject(scmpoo_sub_source_dc, OBJ_BITMAP);
+    scmpoo_sub_target_default = GetCurrentObject(scmpoo_sub_target_dc, OBJ_BITMAP);
+    SelectPalette(scmpoo_sub_source_dc, word_CA4A, FALSE);
+    SelectPalette(scmpoo_sub_target_dc, word_CA4A, FALSE);
     scmpoo_update_virtual_desktop();
     ReleaseDC(arg_0, var_2);
     word_CA46 = 0;
@@ -5867,6 +6101,26 @@ BOOL sub_9200(HWND arg_0)
     word_A896 = 0;
     return TRUE;
 loc_92FA:
+    if (scmpoo_sub_source_dc != NULL) {
+        DeleteDC(scmpoo_sub_source_dc);
+        scmpoo_sub_source_dc = NULL;
+    }
+    if (scmpoo_sub_target_dc != NULL) {
+        DeleteDC(scmpoo_sub_target_dc);
+        scmpoo_sub_target_dc = NULL;
+    }
+    if (word_A85C != NULL) {
+        DeleteObject(word_A85C);
+        word_A85C = NULL;
+    }
+    if (word_A85A != NULL) {
+        DeleteObject(word_A85A);
+        word_A85A = NULL;
+    }
+    if (word_A854 != NULL) {
+        DeleteObject(word_A854);
+        word_A854 = NULL;
+    }
     ReleaseDC(arg_0, var_2);
     return FALSE;
 }
@@ -5874,16 +6128,32 @@ loc_92FA:
 /* Release bitmaps (sub). */
 void sub_930F()
 {
+    if (scmpoo_sub_source_dc != NULL) {
+        SelectObject(scmpoo_sub_source_dc, scmpoo_sub_source_default);
+        DeleteDC(scmpoo_sub_source_dc);
+        scmpoo_sub_source_dc = NULL;
+    }
+    if (scmpoo_sub_target_dc != NULL) {
+        SelectObject(scmpoo_sub_target_dc, scmpoo_sub_target_default);
+        DeleteDC(scmpoo_sub_target_dc);
+        scmpoo_sub_target_dc = NULL;
+    }
     DeleteObject(word_A85C);
     DeleteObject(word_A85A);
     DeleteObject(word_A850[0]);
     DeleteObject(word_A850[1]);
     DeleteObject(word_A854);
+    word_A85C = NULL;
+    word_A85A = NULL;
+    word_A850[0] = NULL;
+    word_A850[1] = NULL;
+    word_A854 = NULL;
 }
 
 /* Update window position and sprite to be actually used (sub). */
 void sub_9350(int arg_0, int arg_2, int arg_4)
 {
+    scmpoo_sub_sprite_index = arg_4;
     word_A878 = arg_0;
     word_A87A = arg_2;
     word_A856 = stru_A8A2[arg_4].bitmaps[0];
@@ -5908,121 +6178,90 @@ void sub_93DF(HWND arg_0)
     word_A872 = 1;
     word_C0BA = 1;
     word_A876 = NULL;
+    scmpoo_sub_region_sprite_index = -1;
+    scmpoo_sub_region_beam_height = -1;
 }
 
-/* Render sprite with double buffering (with fade out effect) (sub). */
+/* Render the companion sprite with reusable DCs and buffers. The fade-out
+ * effect keeps its original mask operations because that mask changes on each
+ * fade frame and therefore cannot use an immutable cached outline. */
 void sub_9438(HWND arg_0)
 {
-    HDC var_2;
-    HDC var_4;
-    HDC var_6;
-    int var_C;
-    int var_E;
-    int var_10;
-    int var_12;
-    int var_14;
-    int var_16;
-    int var_18;
-    int var_1A;
-    int var_1C;
-    int var_1E;
+    BOOL position_changed;
+    BOOL sprite_changed;
+    BOOL beam_changed;
     if (word_A870 != 0) {
         return;
     }
-    if (word_A890 == word_A878 && word_A892 == word_A87A && word_A876 == word_A856 && word_A866 == word_A85E && word_CA46 == 0 && word_CA5C == 0) {
+    position_changed = word_A890 != word_A878 || word_A892 != word_A87A;
+    sprite_changed = word_A876 != word_A856 || word_A866 != word_A85E || word_A868 != word_A860 || scmpoo_sub_region_sprite_index < 0;
+    beam_changed = scmpoo_sub_region_beam_height != word_CA5C;
+    if (!position_changed && !sprite_changed && !beam_changed && word_CA46 == 0 && word_CA5C == 0) {
         return;
     }
-    word_A86E ^= 1;
-    var_2 = GetDC(NULL);
-    SelectPalette(var_2, word_CA4A, FALSE);
-    var_4 = CreateCompatibleDC(var_2);
-    var_6 = CreateCompatibleDC(var_2);
-    SelectPalette(var_6, word_CA4A, FALSE);
-    SelectPalette(var_4, word_CA4A, FALSE);
-    var_16 = max(word_A878, word_A890);
-    var_14 = max(word_A87A, word_A892);
-    var_12 = min(word_A87C + word_A878, word_A894 + word_A890) - var_16;
-    var_10 = min(word_A87A + word_A87E, word_A892 + word_A896) - var_14;
-    if (var_12 <= 0 || var_10 <= 0) {
-        word_A898 = 1;
-        if (word_A872 != 0) {
-            word_A872 = 0;
-        }
-        word_A880 = word_A878;
-        word_A882 = word_A87A;
-        word_A884 = word_A87C;
-        word_A886 = word_A87E;
-        SelectObject(var_4, word_A850[word_A86E]);
-        BitBlt(var_4, 0, 0, word_A884, word_A886, var_2, word_A880, word_A882, SRCCOPY);
-    } else {
-        word_A898 = 0;
-        word_A880 = min(word_A878, word_A890);
-        word_A882 = min(word_A87A, word_A892);
-        word_A884 = max(word_A87C + word_A878, word_A894 + word_A890) - word_A880;
-        word_A886 = max(word_A87A + word_A87E, word_A892 + word_A896) - word_A882;
-        SelectObject(var_4, word_A850[word_A86E]);
-        BitBlt(var_4, 0, 0, word_A884, word_A886, var_2, word_A880, word_A882, SRCCOPY);
-        var_1E = max(word_A880, word_A888);
-        var_1C = max(word_A882, word_A88A);
-        var_1A = min(word_A884 + word_A880, word_A88C + word_A888) - var_1E;
-        var_18 = min(word_A882 + word_A886, word_A88A + word_A88E) - var_1C;
-        var_16 = max(0, var_1E - word_A880);
-        var_14 = max(0, var_1C - word_A882);
-        var_E = max(0, var_1E - word_A888);
-        var_C = max(0, var_1C - word_A88A);
-        if (var_1A > 0 && var_18 > 0) {
-            SelectObject(var_6, word_A850[LOBYTE(word_A86E) - 0xFF & 1]);
-            BitBlt(var_4, var_16, var_14, var_1A, var_18, var_6, var_E, var_C, SRCCOPY);
-        }
-    }
-    if (word_A856 != NULL) {
-        SelectObject(var_6, word_A854);
-        BitBlt(var_6, 0, 0, word_A884, word_A886, var_4, 0, 0, SRCCOPY);
-        var_16 = max(0, word_A878 - word_A880);
-        var_14 = max(0, word_A87A - word_A882);
+    word_A880 = word_A878;
+    word_A882 = word_A87A;
+    word_A884 = word_A87C;
+    word_A886 = word_A87E;
+    if (position_changed && !sprite_changed && !beam_changed && word_CA46 == 0 && word_CA5C == 0) {
+        scmpoo_preserve_sub_bits = TRUE;
+        SetWindowPos(arg_0, NULL, word_A880, word_A882, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW);
+        scmpoo_preserve_sub_bits = FALSE;
+        word_A7B4 = 0;
+    } else if (word_A856 != NULL) {
         if (word_A858 != NULL) {
             if (word_CA46 != 0) {
                 if (word_CA46 == 1) {
-                    SelectObject(var_4, word_A858);
-                    SelectObject(var_6, word_A85C);
-                    BitBlt(var_6, 0, 0, 40, 40, var_4, word_A85E, word_A860, SRCCOPY);
-                    SelectObject(var_4, word_A856);
-                    SelectObject(var_6, word_A85A);
-                    BitBlt(var_6, 0, 0, 40, 40, var_4, word_A85E, word_A860, SRCCOPY);
+                    SelectObject(scmpoo_sub_source_dc, word_A858);
+                    SelectObject(scmpoo_sub_target_dc, word_A85C);
+                    BitBlt(scmpoo_sub_target_dc, 0, 0, 40, 40, scmpoo_sub_source_dc, word_A85E, word_A860, SRCCOPY);
+                    SelectObject(scmpoo_sub_source_dc, word_A856);
+                    SelectObject(scmpoo_sub_target_dc, word_A85A);
+                    BitBlt(scmpoo_sub_target_dc, 0, 0, 40, 40, scmpoo_sub_source_dc, word_A85E, word_A860, SRCCOPY);
                 }
-                SelectObject(var_4, word_A85C);
-                SelectObject(var_6, stru_A8A2[172].bitmaps[0]);
-                BitBlt(var_4, word_CA46 - 1, word_CA46 - 1, 41 - word_CA46, 40, var_6, stru_A8A2[172].x, 0, SRCPAINT);
-                SelectObject(var_4, word_A85A);
-                SelectObject(var_6, stru_A8A2[172].bitmaps[1]);
-                BitBlt(var_4, word_CA46 - 1, word_CA46 - 1, 41 - word_CA46, 40, var_6, stru_A8A2[172].x, 0, SRCAND);
-                SelectObject(var_6, word_A854);
-                SelectObject(var_4, word_A85C);
-                BitBlt(var_6, var_16, var_14, word_A87C, word_A87E, var_4, 0, 0, SRCAND);
-                SelectObject(var_4, word_A85A);
-                BitBlt(var_6, var_16, var_14, word_A87C, word_A87E, var_4, 0, 0, SRCPAINT);
+                SelectObject(scmpoo_sub_target_dc, word_A85C);
+                SelectObject(scmpoo_sub_source_dc, stru_A8A2[172].bitmaps[0]);
+                BitBlt(scmpoo_sub_target_dc, word_CA46 - 1, word_CA46 - 1, 41 - word_CA46, 40,
+                    scmpoo_sub_source_dc, stru_A8A2[172].x, 0, SRCPAINT);
+                SelectObject(scmpoo_sub_target_dc, word_A85A);
+                SelectObject(scmpoo_sub_source_dc, stru_A8A2[172].bitmaps[1]);
+                BitBlt(scmpoo_sub_target_dc, word_CA46 - 1, word_CA46 - 1, 41 - word_CA46, 40,
+                    scmpoo_sub_source_dc, stru_A8A2[172].x, 0, SRCAND);
+                SelectObject(scmpoo_sub_source_dc, word_A85A);
+                SelectObject(scmpoo_sub_target_dc, word_A854);
+                BitBlt(scmpoo_sub_target_dc, 0, 0, word_A87C, word_A87E, scmpoo_sub_source_dc, 0, 0, SRCCOPY);
             } else {
-                SelectObject(var_4, word_A858);
-                BitBlt(var_6, var_16, var_14, word_A87C, word_A87E, var_4, word_A85E, word_A860, SRCAND);
-                SelectObject(var_4, word_A856);
-                BitBlt(var_6, var_16, var_14, word_A87C, word_A87E, var_4, word_A85E, word_A860, SRCPAINT);
+                SelectObject(scmpoo_sub_source_dc, word_A856);
+                SelectObject(scmpoo_sub_target_dc, word_A854);
+                BitBlt(scmpoo_sub_target_dc, 0, 0, word_A87C, word_A87E,
+                    scmpoo_sub_source_dc, word_A85E, word_A860, SRCCOPY);
             }
         } else {
-            SelectObject(var_4, word_A856);
-            BitBlt(var_6, var_16, var_14, word_A87C, word_A87E, var_4, word_A85E, word_A860, SRCCOPY);
+            SelectObject(scmpoo_sub_source_dc, word_A856);
+            SelectObject(scmpoo_sub_target_dc, word_A854);
+            BitBlt(scmpoo_sub_target_dc, 0, 0, word_A87C, word_A87E,
+                scmpoo_sub_source_dc, word_A85E, word_A860, SRCCOPY);
         }
+        SelectObject(scmpoo_sub_source_dc, scmpoo_sub_source_default);
+        SelectObject(scmpoo_sub_target_dc, scmpoo_sub_target_default);
         word_A870 = 1;
         word_CA5E = 1;
-        MoveWindow(arg_0, word_A880, word_A882, word_A884, word_A886 + word_CA5C, FALSE);
+        SetWindowPos(arg_0, NULL, word_A880, word_A882, word_A884, word_A886 + word_CA5C,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW);
         if (word_CA46 != 0 && word_A858 != NULL) {
-            scmpoo_apply_sprite_region(arg_0, word_A85C, 0, 0, word_A87C, word_A87E, var_16, var_14, word_CA5C);
-        } else {
-            scmpoo_apply_sprite_region(arg_0, word_A858, word_A85E, word_A860, word_A87C, word_A87E, var_16, var_14, word_CA5C);
+            scmpoo_apply_sprite_region(arg_0, word_A85C, 0, 0, word_A87C, word_A87E, 0, 0, word_CA5C);
+            scmpoo_sub_region_sprite_index = -1;
+            scmpoo_sub_region_beam_height = word_CA5C;
+        } else if (!scmpoo_apply_cached_sprite_region(arg_0, scmpoo_sub_sprite_index, word_CA5C, TRUE)) {
+            scmpoo_apply_sprite_region(arg_0, word_A858, word_A85E, word_A860,
+                word_A87C, word_A87E, 0, 0, word_CA5C);
+            scmpoo_sub_region_sprite_index = scmpoo_sub_sprite_index;
+            scmpoo_sub_region_beam_height = word_CA5C;
         }
         word_CA5E = 0;
+        word_A7B4 = 0;
     }
-    DeleteDC(var_4);
-    DeleteDC(var_6);
     word_A888 = word_A880;
     word_A88A = word_A882;
     word_A88C = word_A884;
@@ -6034,16 +6273,13 @@ void sub_9438(HWND arg_0)
     word_A876 = word_A856;
     word_A866 = word_A85E;
     word_A868 = word_A860;
-    ReleaseDC(NULL, var_2);
 }
 
 /* Render UFO beam (if any) and present render targets onto window (sub). */
 BOOL sub_9A49(HWND arg_0)
 {
     HDC var_2;
-    HDC var_4;
     RECT var_C;
-    HDC var_E;
 #ifdef _WIN32
     HDC screen;
 #endif
@@ -6054,10 +6290,8 @@ BOOL sub_9A49(HWND arg_0)
     var_2 = GetDC(arg_0);
     SelectPalette(var_2, word_CA4A, FALSE);
     RealizePalette(var_2);
-    var_4 = CreateCompatibleDC(var_2);
-    SelectPalette(var_4, word_CA4A, FALSE);
-    SelectObject(var_4, word_A854);
-    BitBlt(var_2, 0, 0, word_A884, word_A886, var_4, 0, 0, SRCCOPY);
+    SelectObject(scmpoo_sub_target_dc, word_A854);
+    BitBlt(var_2, 0, 0, word_A884, word_A886, scmpoo_sub_target_dc, 0, 0, SRCCOPY);
     if (word_CA5C != 0) {
         if (word_C0B8 == NULL) {
             word_C0B8 = CreateCompatibleBitmap(var_2, 40, SCREEN_HEIGHT * 4 / 5);
@@ -6077,50 +6311,33 @@ BOOL sub_9A49(HWND arg_0)
         if (word_C0B4 == NULL) {
             word_C0B4 = CreateSolidBrush(RGB(128, 128, 0));
         }
-        var_E = CreateCompatibleDC(var_2);
-        SelectObject(var_E, word_C0B2);
+        SelectObject(scmpoo_sub_source_dc, word_C0B2);
 #ifdef _WIN32
         /* Screen contents with height of only 40 pixels can be captured from window device context on Windows 10. Capture directly from screen instead. */
         screen = GetDC(NULL);
-        BitBlt(var_E, 0, 0, 40, word_CA5C, screen, word_A880, word_A882 + 40, SRCCOPY);
+        BitBlt(scmpoo_sub_source_dc, 0, 0, 40, word_CA5C, screen, word_A880, word_A882 + 40, SRCCOPY);
         ReleaseDC(NULL, screen);
 #else
-        BitBlt(var_E, 0, 0, 40, word_CA5C, var_2, 0, 40, SRCCOPY);
+        BitBlt(scmpoo_sub_source_dc, 0, 0, 40, word_CA5C, var_2, 0, 40, SRCCOPY);
 #endif
         var_C.left = 0;
         var_C.top = 0;
         var_C.right = 40;
         var_C.bottom = word_CA5C;
-        SelectObject(var_4, word_C0B8);
-        FillRect(var_4, &var_C, word_CA44);
-        BitBlt(var_E, 0, 0, 40, word_CA5C, var_4, 0, 0, SRCAND);
-        FillRect(var_4, &var_C, word_C0B4);
-        BitBlt(var_E, 0, 0, 40, word_CA5C, var_4, 0, 0, SRCPAINT);
-        BitBlt(var_2, 0, 40, 40, word_CA5C, var_E, 0, 0, SRCCOPY);
-        DeleteDC(var_E);
-        DeleteDC(var_4);
-    } else {
-        if (word_C0B4 != NULL) {
-            DeleteObject(word_C0B4);
-            word_C0B4 = NULL;
-        }
-        if (word_CA44 != NULL) {
-            DeleteObject(word_CA44);
-            word_CA44 = NULL;
-        }
-        if (word_C0B2 != NULL) {
-            DeleteObject(word_C0B2);
-            word_C0B2 = NULL;
-        }
-        if (word_C0B8 != NULL) {
-            DeleteObject(word_C0B8);
-            word_C0B8 = NULL;
-        }
-        DeleteDC(var_4);
+        SelectObject(scmpoo_sub_target_dc, word_C0B8);
+        FillRect(scmpoo_sub_target_dc, &var_C, word_CA44);
+        BitBlt(scmpoo_sub_source_dc, 0, 0, 40, word_CA5C, scmpoo_sub_target_dc, 0, 0, SRCAND);
+        FillRect(scmpoo_sub_target_dc, &var_C, word_C0B4);
+        BitBlt(scmpoo_sub_source_dc, 0, 0, 40, word_CA5C, scmpoo_sub_target_dc, 0, 0, SRCPAINT);
+        BitBlt(var_2, 0, 40, 40, word_CA5C, scmpoo_sub_source_dc, 0, 0, SRCCOPY);
     }
+    SelectObject(scmpoo_sub_source_dc, scmpoo_sub_source_default);
+    SelectObject(scmpoo_sub_target_dc, scmpoo_sub_target_default);
     ReleaseDC(arg_0, var_2);
     return TRUE;
 loc_9CC3:
+    SelectObject(scmpoo_sub_source_dc, scmpoo_sub_source_default);
+    SelectObject(scmpoo_sub_target_dc, scmpoo_sub_target_default);
     ReleaseDC(arg_0, var_2);
     DestroyWindow(arg_0);
     return FALSE;

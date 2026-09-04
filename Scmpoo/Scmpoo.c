@@ -37,6 +37,8 @@
 #define IDC_SETTINGS_REMINDER 1009
 #define IDC_SETTINGS_DEFAULTS 1010
 #define IDC_SETTINGS_SPECIAL_FREQUENCY 1011
+#define IDC_SETTINGS_INSTANCE_COUNT 1012
+#define SCMPOO_SETTINGS_COUNT_TIMER_ID 1U
 #define IDC_ACTION_FLOWER 1101
 #define IDC_ACTION_BURN 1102
 #define IDC_ACTION_BLACK_SHEEP 1103
@@ -427,6 +429,7 @@ void sub_3DA7(HWND);
 void scmpoo_close_all_instances(void);
 int scmpoo_count_running_instances(void);
 int scmpoo_launch_to_instance_limit(void);
+void scmpoo_update_instance_count_display(HWND);
 void sub_3DF0(void);
 int sub_3E7C(HWND *, int, int, int, int);
 int sub_408C(HWND *, int, int, int, int);
@@ -1308,9 +1311,10 @@ void scmpoo_update_reminder(void)
     scmpoo_show_speech(message);
 }
 
-/* Start each process at a different point within the animation period. This
- * prevents a batch of 32 sheep from waking at the same instant forever. The
- * companion window is shifted by another half-period relative to its owner. */
+/* Start each sheep process at a different point within the animation period.
+ * Companion windows deliberately use their original cadence: they are created
+ * during a main-window tick and must remain synchronized with that window for
+ * black-sheep and UFO choreography. */
 void scmpoo_schedule_animation_timer(HWND hWnd, BOOL is_subwindow)
 {
     UINT slot;
@@ -1321,14 +1325,15 @@ void scmpoo_schedule_animation_timer(HWND hWnd, BOOL is_subwindow)
     }
     KillTimer(hWnd, SCMPOO_TIMER_ANIMATION_ID);
     KillTimer(hWnd, SCMPOO_TIMER_STAGGER_ID);
+    if (is_subwindow) {
+        SetTimer(hWnd, SCMPOO_TIMER_ANIMATION_ID, scmpoo_timer_interval, NULL);
+        return;
+    }
     slot = scmpoo_instance_slot_index;
     if (slot >= SCMPOO_MAX_INSTANCES) {
         slot = GetCurrentProcessId() % SCMPOO_MAX_INSTANCES;
     }
     phase = scmpoo_timer_interval * slot / SCMPOO_MAX_INSTANCES;
-    if (is_subwindow) {
-        phase = (phase + scmpoo_timer_interval / 2U) % scmpoo_timer_interval;
-    }
     delay = max((UINT)USER_TIMER_MINIMUM, phase);
     if (SetTimer(hWnd, SCMPOO_TIMER_STAGGER_ID, delay, NULL) == 0U) {
         SetTimer(hWnd, SCMPOO_TIMER_ANIMATION_ID, scmpoo_timer_interval, NULL);
@@ -1954,7 +1959,15 @@ BOOL CALLBACK sub_27FF(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
     switch (uMsg) {
     case WM_INITDIALOG:
         scmpoo_set_dialog_controls(hDlg, FALSE);
+        scmpoo_update_instance_count_display(hDlg);
+        SetTimer(hDlg, SCMPOO_SETTINGS_COUNT_TIMER_ID, 1000U, NULL);
         return TRUE;
+    case WM_TIMER:
+        if (wParam == SCMPOO_SETTINGS_COUNT_TIMER_ID) {
+            scmpoo_update_instance_count_display(hDlg);
+            return TRUE;
+        }
+        break;
     case WM_COMMAND:
         if (LOWORD(wParam) == IDRETRY) {
             MessageBoxW(
@@ -2030,13 +2043,16 @@ BOOL CALLBACK sub_27FF(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
             return TRUE;
         }
         if (LOWORD(wParam) == IDC_START_32) {
-            EndDialog(hDlg, IDC_START_32);
             scmpoo_launch_to_instance_limit();
+            scmpoo_update_instance_count_display(hDlg);
             return TRUE;
         }
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL || LOWORD(wParam) == IDABORT) {
             EndDialog(hDlg, (int)LOWORD(wParam));
         }
+        break;
+    case WM_DESTROY:
+        KillTimer(hDlg, SCMPOO_SETTINGS_COUNT_TIMER_ID);
         break;
     default:
         break;
@@ -3149,6 +3165,18 @@ int scmpoo_count_running_instances(void)
         }
     }
     return max(visible_count, slot_count);
+}
+
+void scmpoo_update_instance_count_display(HWND hDlg)
+{
+    WCHAR text[48];
+    int count;
+    if (hDlg == NULL) {
+        return;
+    }
+    count = scmpoo_count_running_instances();
+    wsprintfW(text, L"当前运行：%d / %d 只", count, SCMPOO_MAX_INSTANCES);
+    SetDlgItemTextW(hDlg, IDC_SETTINGS_INSTANCE_COUNT, text);
 }
 
 /* Start only the number of processes needed to reach the configured limit.

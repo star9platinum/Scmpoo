@@ -62,6 +62,7 @@ BEGIN
     PUSHBUTTON "结束小羊", IDABORT, 280, 108, 78, 18
     PUSHBUTTON "关闭所有小羊", 1110, 280, 132, 78, 18
     PUSHBUTTON "一键开启 32 只", 1111, 280, 156, 78, 18
+    CTEXT "当前运行：1 / 32 只", 1012, 274, 184, 90, 16, SS_CENTER
     LTEXT "设置以 Unicode 保存到当前用户目录，不再写入 Windows 目录，也不需要管理员权限。", -1, 12, 267, 346, 18
 END
 

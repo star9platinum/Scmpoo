@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16.0)
 
 set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_SOURCE_DIR}/cmake/CMakeUserMakeRulesOverride.cmake")
 
-project(Scmpoo C)
+project(Scmpoo VERSION 2.0.0 LANGUAGES C)
 
 if(MSVC)
   set(CMAKE_RC_FLAGS "/c 65001 /l 0x0804")

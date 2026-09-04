@@ -1975,7 +1975,8 @@ BOOL CALLBACK sub_27FF(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 L"原版兼容：声音、整点报时、持续活动和窗口重力。\n\n"
                 L"现代扩展：50%–200% 动画速度、0%–500% 随机特殊动画频率、"
                 L"可选始终置顶、Unicode 称呼、5–240 分钟休息提醒和对话气泡。\n\n"
-                L"程序会自动使用完整虚拟桌面及 Per-Monitor V2 DPI，不需要管理员权限。",
+                L"程序会自动使用完整虚拟桌面及 Per-Monitor V2 DPI，不需要管理员权限。\n\n"
+                L"版本：2.0\n作者：CVTS",
                 L"Screen Mate 小羊设置帮助",
                 MB_ICONINFORMATION | MB_OK);
             return TRUE;

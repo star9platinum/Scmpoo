@@ -23,7 +23,7 @@ LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
 
 107 DIALOGEX 0, 0, 370, 292
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Screen Mate 小羊设置"
+CAPTION "Screen Mate 小羊 2.0 设置"
 FONT 9, "Microsoft YaHei UI", 400, 0, 0x86
 BEGIN
     GROUPBOX "原版兼容选项", -1, 8, 8, 258, 79
@@ -113,8 +113,8 @@ END
 110 WAVE MOVEABLE PURE "110.wav"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 1, 0, 0, 1
-PRODUCTVERSION 1, 0, 0, 1
+FILEVERSION 2, 0, 0, 0
+PRODUCTVERSION 2, 0, 0, 0
 FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
 FILEFLAGS 0x1L
@@ -129,14 +129,14 @@ BEGIN
     BEGIN
         BLOCK "080404b0"
         BEGIN
-            VALUE "CompanyName", "Village Center,Inc.\0"
+            VALUE "CompanyName", "CVTS\0"
             VALUE "FileDescription", "Screen Mate Poo\0"
-            VALUE "FileVersion", "1, 0, 0, 1\0"
+            VALUE "FileVersion", "2.0.0.0\0"
             VALUE "InternalName", "Screen Mate Poo\0"
-            VALUE "LegalCopyright", "Copyright (C) 1996\0"
+            VALUE "LegalCopyright", "Modern Windows version Copyright (C) 2026 CVTS\0"
             VALUE "OriginalFilename", "Scmpoo.exe\0"
             VALUE "ProductName", "Screen Mate Poo\0"
-            VALUE "ProductVersion", "1, 0, 0, 1\0"
+            VALUE "ProductVersion", "2.0\0"
         END
     END
     BLOCK "VarFileInfo"

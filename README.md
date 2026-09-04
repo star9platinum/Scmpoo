@@ -2,6 +2,8 @@
 
 # STRAY SHEEP The Screen Mate
 
+[![Build Windows executables](https://github.com/star9platinum/Scmpoo/actions/workflows/build-windows.yml/badge.svg)](https://github.com/star9platinum/Scmpoo/actions/workflows/build-windows.yml)
+
 ![Windows 3.1](/../images/Windows3.1.png?raw=true) ![Windows 10](/../images/Windows10.png?raw=true)
 
 _STRAY SHEEP The Screen Mate_ (Japanese: STRAY SHEEP スクリーンメイト) is a [digital pet](https://en.wikipedia.org/wiki/Digital_pet) based on Fuji TV's multimedia project _STRAY SHEEP_ (Japanese: ストレイシープ). The application includes notable character animations in Fuji TV's late night animation series _The Adventure of STRAY SHEEP_ (1994) (Japanese: ストレイシープの大冒険), featuring main characters such as the sheep Poe and Merry, along with the alien Hue.
@@ -39,6 +41,8 @@ Double-click with left mouse button with Ctrl and Shift buttons pressed down to 
 ## Build from source
 
 You can use CMake to generate Visual Studio projects and MinGW Makefiles. A minimum version of 3.16.0 is required.
+
+Every push to `master` is built automatically for Windows x64 and x86. Open the latest successful [Build Windows executables](https://github.com/star9platinum/Scmpoo/actions/workflows/build-windows.yml) run and download either the `Scmpoo-Windows-x64` or `Scmpoo-Windows-x86` artifact to get the corresponding `Scmpoo.exe`.
 
 ## Copyright information and credits
 

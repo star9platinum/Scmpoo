@@ -1,0 +1,56 @@
+name: Build Windows executables
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            cmake_arch: x64
+          - arch: x86
+            cmake_arch: Win32
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Configure CMake
+        run: cmake -S . -B "build/${{ matrix.arch }}" -A "${{ matrix.cmake_arch }}"
+
+      - name: Build Release executable
+        run: cmake --build "build/${{ matrix.arch }}" --config Release --parallel
+
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          $executable = "build/${{ matrix.arch }}/Scmpoo/Release/Scmpoo.exe"
+          if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+            throw "Release executable was not generated: $executable"
+          }
+          Get-Item -LiteralPath $executable | Format-List FullName, Length, LastWriteTimeUtc
+
+      - name: Upload ${{ matrix.arch }} executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: Scmpoo-Windows-${{ matrix.arch }}
+          path: build/${{ matrix.arch }}/Scmpoo/Release/Scmpoo.exe
+          if-no-files-found: error
+          retention-days: 30

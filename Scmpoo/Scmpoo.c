@@ -300,7 +300,7 @@ HBITMAP word_C0B8 = NULL; /* UFO beam colour rectangle image. */
 WORD word_C0BA = 0; /* Remaining no-update periods after clearing windows. */
 windowinfo stru_C0BC[32] = {{NULL, {0, 0, 0, 0}, {0}}}; /* Currently visible window list. */
 WORD word_CA3C = 0; /* Prevent special actions? */
-WORD word_CA3E = 0; /* Configuration: Always on top. */
+WORD word_CA3E = 1; /* Modern behavior: Always on top (fixed on). */
 int word_CA40 = 0; /* Known instance count. */
 UINT word_CA42 = 0U; /* Configuration: Gravity always on */
 HBRUSH word_CA44 = NULL; /* UFO beam mask colour brush. */
@@ -1191,7 +1191,7 @@ void scmpoo_show_speech(LPCWSTR message)
         return;
     }
     SendMessageW(scmpoo_speech_window, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-    insert_after = word_CA3E != 0 ? HWND_TOPMOST : HWND_TOP;
+    insert_after = HWND_TOPMOST;
     SetWindowPos(scmpoo_speech_window, insert_after, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     scmpoo_speech_deadline = GetTickCount() + 5000U;
 }
@@ -1232,7 +1232,7 @@ void scmpoo_update_reminder(void)
 /* Apply options that affect live window state and animation cadence. */
 void scmpoo_apply_runtime_settings(HWND hWnd)
 {
-    HWND insert_after;
+    word_CA3E = 1U;
     if (scmpoo_movement_speed < 50U) {
         scmpoo_movement_speed = 50U;
     }
@@ -1246,14 +1246,12 @@ void scmpoo_apply_runtime_settings(HWND hWnd)
     if (hWnd != NULL) {
         KillTimer(hWnd, 1U);
         SetTimer(hWnd, 1U, scmpoo_timer_interval, NULL);
-        insert_after = word_CA3E != 0 ? HWND_TOPMOST : HWND_NOTOPMOST;
-        SetWindowPos(hWnd, insert_after, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+        SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
     }
     if (word_CA60[8] != NULL) {
         KillTimer(word_CA60[8], 1U);
         SetTimer(word_CA60[8], 1U, scmpoo_timer_interval, NULL);
-        insert_after = word_CA3E != 0 ? HWND_TOPMOST : HWND_NOTOPMOST;
-        SetWindowPos(word_CA60[8], insert_after, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+        SetWindowPos(word_CA60[8], HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
     }
 }
 
@@ -1320,9 +1318,9 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 0;
     }
     /* Set the visible window to be owned by the hidden top-level window. */
-    var_2 = CreateWindowEx(0L, "ScreenMatePoo", "Screen Mate", WS_POPUP, 0, 0, 0, 0, ownerwindow, NULL, hInstance, NULL);
+    var_2 = CreateWindowEx(WS_EX_TOPMOST, "ScreenMatePoo", "Screen Mate", WS_POPUP, 0, 0, 0, 0, ownerwindow, NULL, hInstance, NULL);
 #else
-    var_2 = CreateWindowEx(0L, "ScreenMatePoo", "Screen Mate", WS_POPUP, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    var_2 = CreateWindowEx(WS_EX_TOPMOST, "ScreenMatePoo", "Screen Mate", WS_POPUP, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
 #endif
     if (var_2 == NULL) {
         return 0;
@@ -1461,6 +1459,9 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         windowpos = (LPWINDOWPOS)lParam;
         if (word_A7A2 != 0) {
             windowpos = (LPWINDOWPOS)lParam;
+        }
+        if ((windowpos->flags & SWP_NOZORDER) == 0 && windowpos->hwndInsertAfter != HWND_TOPMOST) {
+            windowpos->hwndInsertAfter = HWND_TOPMOST;
         }
         windowpos->flags |= SWP_NOCOPYBITS;
         word_A7AC = 1;
@@ -1636,7 +1637,6 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_LBUTTONDBLCLK:
     case WM_USER + 2:
         scmpoo_reset_user_activity();
-        *(WORD *)var_122 = word_CA3E;
         var_128 = word_CA42;
         word_C0B0 = hWnd;
         if ((HIBYTE(GetKeyState(VK_SHIFT)) & 0x80) != 0 && (HIBYTE(GetKeyState(VK_CONTROL)) & 0x80) != 0) {
@@ -1648,13 +1648,7 @@ LRESULT CALLBACK sub_1DF3(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         FreeProcInstance(proc);
         sub_3237(hWnd);
-        if (*(WORD *)var_122 != word_CA3E) {
-            if (word_CA3E != 0) {
-                SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
-            } else {
-                SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
-            }
-        }
+        SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
         if (var_128 != word_CA42 && word_CA42 != 0) {
             sub_8FD7(2);
         }
@@ -1693,6 +1687,9 @@ LRESULT CALLBACK sub_2699(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         break;
     case WM_WINDOWPOSCHANGING:
         var_4 = (LPWINDOWPOS)lParam;
+        if ((var_4->flags & SWP_NOZORDER) == 0 && var_4->hwndInsertAfter != HWND_TOPMOST) {
+            var_4->hwndInsertAfter = HWND_TOPMOST;
+        }
         var_4->flags |= SWP_NOCOPYBITS;
         word_A7B4 = 1;
         return 0;
@@ -1742,7 +1739,6 @@ void scmpoo_set_dialog_controls(HWND hDlg, BOOL use_defaults)
     UINT chime_enabled;
     UINT always_moving;
     UINT gravity_enabled;
-    UINT always_on_top;
     UINT speech_enabled;
     UINT speed;
     UINT reminder;
@@ -1752,7 +1748,6 @@ void scmpoo_set_dialog_controls(HWND hDlg, BOOL use_defaults)
         chime_enabled = 0U;
         always_moving = 0U;
         gravity_enabled = 1U;
-        always_on_top = 1U;
         speech_enabled = 1U;
         speed = 100U;
         reminder = 45U;
@@ -1762,7 +1757,6 @@ void scmpoo_set_dialog_controls(HWND hDlg, BOOL use_defaults)
         chime_enabled = word_C0AC;
         always_moving = word_C0B6;
         gravity_enabled = word_CA42;
-        always_on_top = word_CA3E;
         speech_enabled = scmpoo_show_speech_bubbles;
         speed = scmpoo_movement_speed;
         reminder = scmpoo_reminder_minutes;
@@ -1772,7 +1766,8 @@ void scmpoo_set_dialog_controls(HWND hDlg, BOOL use_defaults)
     CheckDlgButton(hDlg, IDC_SETTINGS_CHIME, chime_enabled ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hDlg, IDC_SETTINGS_ALWAYS_MOVING, always_moving ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hDlg, IDC_SETTINGS_GRAVITY, gravity_enabled ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(hDlg, IDC_SETTINGS_ALWAYS_ON_TOP, always_on_top ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hDlg, IDC_SETTINGS_ALWAYS_ON_TOP, BST_CHECKED);
+    EnableWindow(GetDlgItem(hDlg, IDC_SETTINGS_ALWAYS_ON_TOP), FALSE);
     CheckDlgButton(hDlg, IDC_SETTINGS_SPEECH, speech_enabled ? BST_CHECKED : BST_UNCHECKED);
     SetDlgItemTextW(hDlg, IDC_SETTINGS_OWNER, owner_name);
     SetDlgItemInt(hDlg, IDC_SETTINGS_SPEED, speed, FALSE);
@@ -1795,7 +1790,7 @@ BOOL CALLBACK sub_27FF(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
             MessageBoxW(
                 hDlg,
                 L"原版兼容：声音、整点报时、持续活动和窗口重力。\n\n"
-                L"现代扩展：50%–200% 动画速度、始终置顶、Unicode 称呼、"
+                L"现代扩展：50%–200% 动画速度、固定始终置顶、Unicode 称呼、"
                 L"5–240 分钟休息提醒和对话气泡。\n\n"
                 L"程序会自动使用完整虚拟桌面及 Per-Monitor V2 DPI，不需要管理员权限。",
                 L"Screen Mate 小羊设置帮助",
@@ -1839,7 +1834,7 @@ BOOL CALLBACK sub_27FF(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
             word_CA5A = IsDlgButtonChecked(hDlg, IDC_SETTINGS_SOUND) == BST_CHECKED;
             word_C0B6 = IsDlgButtonChecked(hDlg, IDC_SETTINGS_ALWAYS_MOVING) == BST_CHECKED;
             word_CA42 = IsDlgButtonChecked(hDlg, IDC_SETTINGS_GRAVITY) == BST_CHECKED;
-            word_CA3E = IsDlgButtonChecked(hDlg, IDC_SETTINGS_ALWAYS_ON_TOP) == BST_CHECKED;
+            word_CA3E = 1U;
             scmpoo_show_speech_bubbles = IsDlgButtonChecked(hDlg, IDC_SETTINGS_SPEECH) == BST_CHECKED;
             scmpoo_movement_speed = speed;
             scmpoo_reminder_minutes = reminder;
@@ -1907,16 +1902,14 @@ void sub_2A21(void)
     }
 #ifdef _WIN32
     /* Set the visible window to be owned by the hidden top-level window. */
-    word_CA60[8] = CreateWindowEx(0L, "ScreenMatePooSub", "ScreenMate Sub", WS_POPUP, 0, 0, 0, 0, ownerwindow, NULL, word_CA58, NULL);
+    word_CA60[8] = CreateWindowEx(WS_EX_TOPMOST, "ScreenMatePooSub", "ScreenMate Sub", WS_POPUP, 0, 0, 0, 0, ownerwindow, NULL, word_CA58, NULL);
 #else
-    word_CA60[8] = CreateWindowEx(0L, "ScreenMatePooSub", "ScreenMate Sub", WS_POPUP, 0, 0, 0, 0, NULL, NULL, word_CA58, NULL);
+    word_CA60[8] = CreateWindowEx(WS_EX_TOPMOST, "ScreenMatePooSub", "ScreenMate Sub", WS_POPUP, 0, 0, 0, 0, NULL, NULL, word_CA58, NULL);
 #endif
     if (word_CA60[8] != NULL) {
         ShowWindow(word_CA60[8], SW_SHOWNA);
         UpdateWindow(word_CA60[8]);
-        if (word_CA3E != 0) {
-            SetWindowPos(word_CA60[8], HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
-        }
+        SetWindowPos(word_CA60[8], HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
     } else {
         word_CA3C = 1;
         sub_4CE1();
@@ -1935,18 +1928,13 @@ void sub_2A96(void)
 /* Place window to topmost position. */
 void sub_2ABF(HWND arg_0)
 {
-    if (word_CA3E == 0) {
-        SetWindowPos(arg_0, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
-        SetWindowPos(arg_0, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
-    }
+    SetWindowPos(arg_0, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
 }
 
 /* Place a window on top of another. */
 void sub_2B01(HWND arg_0, HWND arg_2)
 {
-    if (word_CA3E == 0) {
-        SetWindowPos(arg_0, arg_2, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
-    }
+    SetWindowPos(arg_0, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
 }
 
 /* Load resource image, generate (flipped) colour and mask images, store handles into sprite info structure. */
@@ -2164,7 +2152,7 @@ void sub_2F36(void)
     word_C0AC = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"Alarm", word_C0AC, scmpoo_settings_path);
     word_C0B6 = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"NoSleep", word_C0B6, scmpoo_settings_path);
     word_CA42 = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"GForce", word_CA42, scmpoo_settings_path);
-    word_CA3E = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"AlwaysOnTop", word_CA3E, scmpoo_settings_path);
+    word_CA3E = 1U;
     scmpoo_show_speech_bubbles = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"ShowSpeechBubbles", scmpoo_show_speech_bubbles, scmpoo_settings_path);
     scmpoo_movement_speed = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"MovementSpeedPercent", scmpoo_movement_speed, scmpoo_settings_path);
     scmpoo_reminder_minutes = GetPrivateProfileIntW(SCMPOO_SETTINGS_SECTION, L"ReminderMinutes", scmpoo_reminder_minutes, scmpoo_settings_path);

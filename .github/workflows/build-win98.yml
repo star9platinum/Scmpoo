@@ -1,0 +1,36 @@
+name: Build CLR 2.0 compatibility artifact
+
+on:
+  push:
+    branches:
+      - codex/win98-compat
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Fetch pinned .NET 2.0 reference assemblies
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'net20-reference.zip'
+          $references = Join-Path $env:RUNNER_TEMP 'net20-reference'
+          Invoke-WebRequest -Uri 'https://api.nuget.org/v3-flatcontainer/microsoft.netframework.referenceassemblies.net20/1.0.3/microsoft.netframework.referenceassemblies.net20.1.0.3.nupkg' -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $references
+      - name: Compile, audit and run runtime checks
+        shell: pwsh
+        run: |
+          $references = Join-Path $env:RUNNER_TEMP 'net20-reference/build/.NETFramework/v2.0'
+          ./Legacy/build-win98.ps1 -FrameworkDirectory $references -OutputDirectory artifacts/win98 -RunSelfTests
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Scmpoo-Win98-CLR2-experimental
+          path: artifacts/win98/
+          if-no-files-found: error

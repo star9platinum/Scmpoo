@@ -6,6 +6,23 @@
 
 Modern C# version 3.0, based on the reconstructed Windows version 2.0 by CVTS.
 
+## Windows 98 兼容分支
+
+本分支从现代 C# 分支 `1008e5f` 派生，加入 `Legacy/` 构建工具。同一套扩展程序源码使用现代 Roslyn 编译器生成 **x86、PE32、CLR 2.0、OS/Subsystem 4.0** 的 `Scmpoo.Win98.exe`，不依赖 .NET 10。原始素材全部内嵌，设置、共享调度、动作、数量、暂停、预设等功能保留。
+
+```powershell
+./Legacy/build-win98.ps1 -RunSelfTests
+# 输出：build/win98/Scmpoo.Win98.exe 和同名 .config
+```
+
+构建机需要现代 .NET SDK 和 .NET 2.0 参考程序集；可使用本机 .NET 3.5 可选组件提供的 CLR2 文件，或通过 `-FrameworkDirectory` 指定独立参考程序集。CI 使用固定版本 `Microsoft.NETFramework.ReferenceAssemblies.net20` 1.0.3，无须在构建机安装 Win98。运行环境配置优先 CLR2，现代 Windows 上可回退 CLR4；报告记录实际运行时版本。
+
+**目标环境为 Windows 98 SE 加 .NET Framework 2.0 RTM。** 不要使用不支持 Win98 的 .NET 2.0 SP1/SP2、3.5 或更高运行库。已在现代 Windows 的真实 CLR `2.0.50727.9179` 上通过完整自检及 32 只窗口压力测试，并检查了 PE、程序集依赖、原生导入和资源；**尚未在 Win98 真机或虚拟机运行，不能宣称已完成 Win98 实机兼容验证**。
+
+当前完整可执行文件约 372 KiB，连同 `.config` 即可分发，不要把构建用的参考程序集当作运行库一起复制。CLR2 的实际设置窗口测试也通过了从 3 只扩展到 32 只并立即应用、单只设置隔离、窗口未提交修改保留和暂停同步。
+
+兼容分支禁用现代 DPI 初始化和 Win9x 不支持的进程 CPU/内存计数，相关测试结果明确标为不可用。XML 保存改用可恢复的重命名流程，避免 `File.Replace`；字符串互操作让 CLR 在 Win9x 选择 ANSI API。两种缺失的 `Action` 委托签名由兼容层补充。Windows 98 的共享 GDI/USER 资源较少，建议从一只、1 倍大小开始验证。详细前提、技术实现、构建参数和验证限制见 [Legacy/README.md](Legacy/README.md)。
+
 ## C# 3.0 分支
 
 本分支以 `Modern/Scmpoo.Modern.csproj` 为主程序，使用现代 C#、.NET 10 和 WinForms。动画、设置、窗口管理、音频和绘制全部由 C# 实现，不需要调用原生版 EXE 或 DLL。原来的 `Scmpoo/Scmpoo.c` 保留为可构建的历史实现及行为参考；`master` 上的修复版本为 `176aa39`。

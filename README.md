@@ -4,7 +4,62 @@
 
 [![Build Windows executables](https://github.com/star9platinum/Scmpoo/actions/workflows/build-windows.yml/badge.svg)](https://github.com/star9platinum/Scmpoo/actions/workflows/build-windows.yml)
 
-Modern Windows version 2.0 by CVTS.
+Modern C# version 3.0, based on the reconstructed Windows version 2.0 by CVTS.
+
+## C# 3.0 分支
+
+本分支以 `Modern/Scmpoo.Modern.csproj` 为主程序，使用现代 C#、.NET 10 和 WinForms。动画、设置、窗口管理、音频和绘制全部由 C# 实现，不需要调用原生版 EXE 或 DLL。原来的 `Scmpoo/Scmpoo.c` 保留为可构建的历史实现及行为参考；`master` 上的修复版本为 `176aa39`。
+
+双击小羊打开设置；右键菜单可调用剧情、补齐 32 只或关闭全部。再次运行现代版会通知同一桌面的现有进程添加小羊，不会再启动一整套资源。`--settings` 打开现有小羊的设置，`--count 32` 在首次启动时建立 32 只。托盘图标提供设置、数量和暂停全部操作。
+
+现代扩展包括每只小羊的 50%–200% 速度、0%–500% 特殊动作频率、1–4 倍像素显示、指定活动显示器、跟随鼠标、暂停、静音时段（支持跨午夜）、可关闭的休息提醒和 XML 预设导入导出。设置窗口列出全部 30 种原版动作入口，包括黑羊、浴盆和三种 UFO 剧情。**立即应用到所有小羊**直接为当前进程内的全部对象应用独立配置副本，不需要等待磁盘轮询或重启。另有“应用到当前小羊”；其他设置窗口中未提交的修改不会因此被覆盖。
+
+### 构建与运行现代版
+
+```powershell
+dotnet build Modern/Scmpoo.Modern.csproj -c Release
+./Modern/build.ps1 -Runtime win-x64
+# 同时打包 .NET 运行库，目标机器无须预先安装 .NET：
+./Modern/build.ps1 -Runtime win-x86 -SelfContained
+./artifacts/modern-win-x64/Scmpoo.Modern.exe --count 32 --settings
+```
+
+开发需要 .NET 10 SDK；未带运行库的发布目录需要对应架构的 .NET 10 Desktop Runtime。请分发整个发布目录。CI 对现代分支构建 x64 和 x86 的自包含包，并运行确定性回归测试。原生版的 CMake 构建方法保留在下文。
+
+### 现代实现细节
+
+| 模块 | 责任 |
+| --- | --- |
+| `Animation/SheepActor.cs` | 每只小羊独立状态、随机源、报时生命周期、拖动、显示器恢复、平台接口 |
+| `Animation/AnimationMachine.cs` | 原 C 状态机的全部 0–154 状态标签、原始动作帧表与剧情子窗口状态；显式保留原来的跳转顺序 |
+| `Platform/DesktopSnapshot.cs` | 全群共用的每 250 ms 系统窗口快照、工作区和指针信息，排除本进程窗口 |
+| `FlockContext.cs` | 一个 UI 线程、一个 27 ms 调度器、每只小羊独立更新期限；落后时跳过积压，不反复追帧；全部暂停时降至 250 ms |
+| `Rendering/SpriteAtlas.cs` | 用 GDI+ 解码原版 11 张 RLE8 BMP，统一缓存 176 帧、镜像、最近邻缩放、原掩码淡出和透明区域 |
+| `UI/SpriteWindow.cs` | 每只小羊一个无边框窗口，剧情时按需创建伴随窗口；仅换帧时重建形状，未变帧仅更新位置 |
+| `Services/SoundService.cs` | 全群唯一音频工作线程和请求槽；200 ms 播放请求间隔，合并瞬时重复音效；仅接受播放请求后才转移声音归属 |
+| `Settings/AppSettings.cs` | 配置校验、禁用 DTD 的 XML 解析、完整文件保存、跨午夜静音时段；每只小羊使用独立配置副本 |
+
+小羊之间直接读取对象坐标，不再通过跨进程窗口数据交换位置。显示器热拔插刷新工作区并恢复丢失的小羊；特殊剧情限定到事件开始时的真实屏幕工作区，避免将剧情中心放在虚拟桌面空洞中。所有声音调用均在工作线程运行，声音设备阻塞不会阻塞动作状态推进。停用报时会立即退出相应等待状态，声音关闭不影响报时动作的正常结束。
+
+缩放是保留原版运动参数的像素显示倍率：按脚底中点放大，物理碰撞和剧情间距仍使用原始 40 像素逻辑尺寸。在高倍率、屏幕边缘或密集碰撞时，视觉轮廓可能超出逻辑边界；这不是高分辨率物理引擎。UFO 光束保留原来的桌面像素重着色，临时缓冲按 128 像素增长，仅光束存在时捕获该区域。
+
+配置位于 `%LOCALAPPDATA%\Scmpoo\modern-settings.xml`，与原生版 INI 分开。首次启动现代版使用默认值；预设导入先填充当前设置窗口，点击应用后生效。静音时段起止相同时视为全天静音。按用户登录会话限制为一个现代进程；原生版与现代版分别管理各自的羊群。
+
+### 回归与性能
+
+```powershell
+./Modern/bin/Release/net10.0-windows/Scmpoo.Modern.exe --self-test --output artifacts/modern-tests
+./Modern/bin/Release/net10.0-windows/Scmpoo.Modern.exe --ui-test --output artifacts/modern-ui
+./Modern/bin/Release/net10.0-windows/Scmpoo.Modern.exe --stress-test --output artifacts/modern-stress
+```
+
+命令完成后，输出目录中的 `self-test.txt`、`ui-test.txt` 或 `modern-stress.xml` 是结果；失败写入 `error.txt` 并返回非零退出码。界面测试会暂存并恢复现代设置文件，运行前应关闭现有现代羊群。
+
+动作测试覆盖全部 30 种动作入口、重力开关、长时间 32 只模拟、报时取消、睡眠唤醒及零坐标窗口/地面，合计至少 246,000 次模拟更新。精灵测试逐像素核对原素材、镜像、透明区域、缩放和淡出，并生成素材联系图。真实窗口测试核验设置按钮和全群应用；压力测试在真实 32 只窗口上执行叫声及浴盆，输出 CPU、内存、动画步数、窗口扫描次数和缓存项数。
+
+本机一次 12 秒压力运行中，原生 32 进程合计工作集约 670 MiB，现代单进程约 86 MiB，现代私有提交约 39 MiB。两轮包含相似但不完全相同的剧情负载，CPU 约为单个逻辑核心的 54% 与 57%，不能据此宣称 CPU 加速比；主要已验证收益是共享资源、减少进程和桌面扫描。总工作集含共享页，这些数值也不是精确的独占内存对比。具体开销取决于显示器、剧情、倍率、速度、音频驱动和桌面窗口数量。
+
+## 原生版说明与历史
 
 ![Windows 3.1](/../images/Windows3.1.png?raw=true) ![Windows 10](/../images/Windows10.png?raw=true)
 

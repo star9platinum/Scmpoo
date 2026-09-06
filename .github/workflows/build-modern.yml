@@ -1,0 +1,35 @@
+name: Build C# flock
+
+on:
+  push:
+    branches:
+      - codex/modern-csharp
+      - codex/win98-compat
+  pull_request:
+    paths:
+      - 'Modern/**'
+      - '.github/workflows/build-modern.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  modern:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        runtime: [win-x64, win-x86]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish and run deterministic checks
+        shell: pwsh
+        run: ./Modern/build.ps1 -Runtime '${{ matrix.runtime }}' -SelfContained
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Scmpoo-Modern-${{ matrix.runtime }}
+          path: artifacts/modern-${{ matrix.runtime }}/
+          if-no-files-found: error

@@ -47,6 +47,9 @@ jobs:
           }
           Get-Item -LiteralPath $executable | Format-List FullName, Length, LastWriteTimeUtc
 
+      - name: Regression checks
+        run: ctest --test-dir "build/${{ matrix.arch }}" -C Release --output-on-failure
+
       - name: Upload ${{ matrix.arch }} executable
         uses: actions/upload-artifact@v7
         with:
